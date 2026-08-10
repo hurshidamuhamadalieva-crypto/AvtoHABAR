@@ -1,0 +1,47 @@
+2026-08-10 22:37:49 | INFO     | __main__ | 🚀 AutoAd Bot ishga tushmoqda...
+2026-08-10 22:37:49 | INFO     | app.database | Database initialized successfully.
+2026-08-10 22:37:49 | INFO     | __main__ | ✅ Ma'lumotlar bazasi tayyor.
+2026-08-10 22:37:49 | INFO     | __main__ | ✅ Fon vazifalar ishga tushdi.
+2026-08-10 22:37:49 | INFO     | __main__ | ✅ Bot ishlamoqda. To'xtatish uchun Ctrl+C bosing.
+2026-08-10 22:37:49 | INFO     | aiogram.dispatcher | Start polling
+2026-08-10 22:37:50 | INFO     | aiogram.dispatcher | Run polling for bot @habarchi_super_bot id=8866470342 - 'HABARCHI BOT SUPER'
+2026-08-10 22:37:57 | INFO     | aiogram.event | Update id=158449407 is handled. Duration 454 ms by bot id=8866470342
+2026-08-10 22:37:58 | INFO     | aiogram.event | Update id=158449408 is handled. Duration 297 ms by bot id=8866470342
+2026-08-10 22:37:59 | ERROR    | app.handlers.payment | Admin 7573028323 ga xabar yuborishda xato: Telegram server says - Bad Request: chat not found
+2026-08-10 22:38:00 | INFO     | aiogram.event | Update id=158449409 is handled. Duration 577 ms by bot id=8866470342
+2026-08-10 22:38:19 | INFO     | aiogram.event | Update id=158449410 is handled. Duration 625 ms by bot id=8866470342
+2026-08-10 22:38:22 | INFO     | aiogram.event | Update id=158449411 is handled. Duration 313 ms by bot id=8866470342
+2026-08-10 22:38:23 | INFO     | aiogram.event | Update id=158449412 is handled. Duration 516 ms by bot id=8866470342
+2026-08-10 22:38:28 | INFO     | aiogram.event | Update id=158449413 is handled. Duration 3030 ms by bot id=8866470342
+2026-08-10 22:38:34 | INFO     | aiogram.event | Update id=158449414 is handled. Duration 375 ms by bot id=8866470342
+2026-08-10 22:39:22 | INFO     | aiogram.event | Update id=158449415 is handled. Duration 421 ms by bot id=8866470342
+2026-08-10 22:39:28 | INFO     | aiogram.event | Update id=158449416 is handled. Duration 313 ms by bot id=8866470342
+2026-08-10 22:40:15 | ERROR    | app.handlers.payment | Admin 7573028323 ga xabar yuborishda xato: Telegram server says - Bad Request: chat not found
+2026-08-10 22:40:15 | INFO     | aiogram.event | Update id=158449417 is handled. Duration 796 ms by bot id=8866470342
+2026-08-10 22:40:17 | INFO     | aiogram.event | Update id=158449418 is handled. Duration 405 ms by bot id=8866470342
+2026-08-10 22:40:22 | INFO     | aiogram.event | Update id=158449419 is handled. Duration 140 ms by bot id=8866470342
+2026-08-10 22:40:25 | INFO     | aiogram.event | Update id=158449420 is handled. Duration 405 ms by bot id=8866470342
+2026-08-10 22:40:36 | INFO     | aiogram.event | Update id=158449421 is handled. Duration 391 ms by bot id=8866470342
+2026-08-10 22:40:43 | INFO     | aiogram.event | Update id=158449422 is handled. Duration 2703 ms by bot id=8866470342
+2026-08-10 22:40:53 | INFO     | aiogram.event | Update id=158449423 is handled. Duration 483 ms by bot id=8866470342
+2026-08-10 22:40:59 | INFO     | aiogram.event | Update id=158449424 is handled. Duration 1452 ms by bot id=8866470342
+2026-08-10 22:41:07 | INFO     | aiogram.event | Update id=158449425 is handled. Duration 295 ms by bot id=8866470342
+2026-08-10 22:41:11 | INFO     | aiogram.event | Update id=158449426 is handled. Duration 1093 ms by bot id=8866470342
+2026-08-10 22:41:13 | INFO     | aiogram.event | Update id=158449427 is handled. Duration 592 ms by bot id=8866470342
+2026-08-10 22:41:15 | INFO     | aiogram.event | Update id=158449428 is handled. Duration 266 ms by bot id=8866470342
+2026-08-10 22:41:18 | INFO     | aiogram.event | Update id=158449429 is handled. Duration 327 ms by bot id=8866470342
+2026-08-10 22:41:20 | INFO     | aiogram.event | Update id=158449430 is handled. Duration 297 ms by bot id=8866470342
+2026-08-10 22:41:22 | INFO     | aiogram.event | Update id=158449431 is handled. Duration 141 ms by bot id=8866470342
+2026-08-10 22:41:25 | INFO     | aiogram.event | Update id=158449432 is handled. Duration 266 ms by bot id=8866470342
+2026-08-10 22:41:28 | INFO     | app.services.sender_service | Yuborish sikli boshlandi: foydalanuvchi 2
+2026-08-10 22:41:28 | INFO     | app.services.sender_service | [2] 1 ta guruh/kanalga yuborilmoqda | interval=7daq | orasida 8s
+2026-08-10 22:41:29 | INFO     | aiogram.event | Update id=158449433 is handled. Duration 282 ms by bot id=8866470342
+2026-08-10 22:41:29 | INFO     | app.services.sender_service | ✅ [1/1] Bagdod Rishton Toshkent TAKSI
+2026-08-10 22:41:29 | INFO     | app.services.sender_service | [2] Sikl tugadi → ✅1 ❌0 | Keyingisi 7 daqiqadan keyin
+2026-08-10 22:41:38 | INFO     | app.services.sender_service | [2] Yuborish bekor qilindi
+2026-08-10 22:41:38 | INFO     | app.services.sender_service | [2] Yuborish sikli tugatildi
+2026-08-10 22:41:38 | INFO     | aiogram.event | Update id=158449434 is handled. Duration 391 ms by bot id=8866470342
+2026-08-10 22:42:17 | INFO     | aiogram.dispatcher | Polling stopped for bot @habarchi_super_bot id=8866470342 - 'HABARCHI BOT SUPER'
+2026-08-10 22:42:17 | INFO     | aiogram.dispatcher | Polling stopped
+2026-08-10 22:42:17 | INFO     | __main__ | 🛑 Bot to'xtatildi.
+2026-08-10 22:42:17 | INFO     | __main__ | Foydalanuvchi tomonidan to'xtatildi.
