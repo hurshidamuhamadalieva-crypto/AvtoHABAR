@@ -36,6 +36,18 @@ class User(Base):
     phone_number = Column(String(32), nullable=True)
     session_string = Column(Text, nullable=True)
 
+    # Login paytida shu foydalanuvchiga biriktirilgan proksi va qurilma
+    # fingerprinti — kirishdan keyingi BARCHA ulanishlarda (guruh import
+    # qilish, e'lon yuborish va h.k.) AYNAN shu proksi/qurilma qayta
+    # ishlatiladi. Aks holda: login boshqa IP'dan, keyingi ishlatish esa
+    # boshqa (yoki proksisiz) IP'dan bo'lsa, Telegram buni "shubhali,
+    # boshqa joydan kirish" deb hisoblab, akkauntni avtomatik chiqarib
+    # yuboradi — aynan shu muammo yuzaga kelgan edi.
+    proxy_index = Column(Integer, nullable=True)
+    device_model = Column(String(128), nullable=True)
+    device_system_version = Column(String(128), nullable=True)
+    device_app_version = Column(String(128), nullable=True)
+
     subscriptions = relationship("Subscription", back_populates="user", cascade="all, delete-orphan")
     payments = relationship("Payment", back_populates="user", cascade="all, delete-orphan")
     advertisements = relationship("Advertisement", back_populates="user", cascade="all, delete-orphan")
@@ -134,7 +146,38 @@ class SendStat(Base):
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Railway'da allaqachon ishlayotgan (eski) bazada yangi ustunlar
+        # avtomatik qo'shilmaydi (create_all faqat YO'Q jadvallarni yaratadi,
+        # mavjud jadvalga yangi ustun qo'shmaydi). Shu sababli mavjud
+        # foydalanuvchilar bazasini yo'qotmasdan, kerakli ustunlarni
+        # xavfsiz ravishda qo'shib qo'yamiz (allaqachon bo'lsa — o'tkazib
+        # yuboradi).
+        await _ensure_columns(conn)
     logger.info("Database initialized successfully.")
+
+
+async def _ensure_columns(conn):
+    if "sqlite" not in config.DATABASE_URL:
+        # Migratsiya faqat SQLite uchun yozilgan (PRAGMA table_info SQLite'ga xos).
+        # PostgreSQL va boshqa bazalar ishlatilsa, ustunlar create_all orqali
+        # yangi o'rnatishda avtomatik yaratiladi; mavjud bazani o'zgartirish
+        # kerak bo'lsa, buni qo'lda (masalan, Alembic bilan) bajaring.
+        return
+    required = {
+        "proxy_index": "INTEGER",
+        "device_model": "VARCHAR(128)",
+        "device_system_version": "VARCHAR(128)",
+        "device_app_version": "VARCHAR(128)",
+    }
+    result = await conn.exec_driver_sql("PRAGMA table_info(users)")
+    existing_cols = {row[1] for row in result.fetchall()}
+    for col_name, col_type in required.items():
+        if col_name not in existing_cols:
+            try:
+                await conn.exec_driver_sql(f"ALTER TABLE users ADD COLUMN {col_name} {col_type}")
+                logger.info(f"Migratsiya: 'users' jadvaliga '{col_name}' ustuni qo'shildi.")
+            except Exception as e:
+                logger.warning(f"Migratsiya xatosi ({col_name}): {e}")
 
 
 # ─── DB Helper Functions ──────────────────────────────────────────────────────

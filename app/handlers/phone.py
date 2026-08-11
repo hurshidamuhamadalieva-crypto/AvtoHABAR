@@ -131,7 +131,15 @@ async def cb_confirm_disconnect(call: CallbackQuery, state: FSMContext):
     except Exception as e:
         logger.warning(f"Disconnect error for {user.id}: {e}")
 
-    await update_user(call.from_user.id, session_string=None, phone_number=None)
+    await update_user(
+        call.from_user.id,
+        session_string=None,
+        phone_number=None,
+        proxy_index=None,
+        device_model=None,
+        device_system_version=None,
+        device_app_version=None,
+    )
     await state.clear()
 
     await call.message.edit_text(
@@ -231,12 +239,14 @@ async def _process_phone(message: Message, state: FSMContext, phone: str):
     )
 
     try:
-        client, result = await telethon_service.send_code(phone)
+        client, result, proxy_index, device = await telethon_service.send_code(phone)
         _pending_logins[message.from_user.id] = {
             "client": client,
             "phone": phone,
             "phone_code_hash": result.phone_code_hash,
             "created_at": time.time(),
+            "proxy_index": proxy_index,
+            "device": device,
         }
         await state.update_data(phone=phone)
         await state.set_state(PhoneFlow.entering_code)
@@ -307,7 +317,16 @@ async def receive_code(message: Message, state: FSMContext):
         )
 
         user = await get_or_create_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
-        await update_user(message.from_user.id, session_string=session_string, phone_number=pending["phone"])
+        device = pending.get("device") or (None, None, None)
+        await update_user(
+            message.from_user.id,
+            session_string=session_string,
+            phone_number=pending["phone"],
+            proxy_index=pending.get("proxy_index"),
+            device_model=device[0],
+            device_system_version=device[1],
+            device_app_version=device[2],
+        )
 
         # Muvaqqat login klientini yopamiz — doimiy ulanish keyinchalik
         # telethon_service.get_client() orqali alohida, boshqariladigan pool'da
@@ -390,7 +409,16 @@ async def receive_2fa_password(message: Message, state: FSMContext):
         )
 
         user = await get_or_create_user(message.from_user.id)
-        await update_user(message.from_user.id, session_string=session_string, phone_number=pending["phone"])
+        device = pending.get("device") or (None, None, None)
+        await update_user(
+            message.from_user.id,
+            session_string=session_string,
+            phone_number=pending["phone"],
+            proxy_index=pending.get("proxy_index"),
+            device_model=device[0],
+            device_system_version=device[1],
+            device_app_version=device[2],
+        )
 
         try:
             await pending["client"].disconnect()

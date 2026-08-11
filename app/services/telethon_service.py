@@ -30,7 +30,7 @@ _clients: Dict[int, TelegramClient] = {}
 # boshqa proksidan va boshqa (tasodifiy) qurilma fingerprint bilan yuboriladi.
 # ─────────────────────────────────────────────────────────────────────────────
 
-_proxy_cycle = itertools.cycle(config.PROXIES) if config.PROXIES else None
+_proxy_counter = itertools.count()
 _proxy_lock = asyncio.Lock()
 
 # Haqiqiy, keng tarqalgan qurilmalar ko'rinishidagi fingerprintlar to'plami —
@@ -58,10 +58,12 @@ class FloodWaitException(Exception):
 
 
 async def _next_proxy():
-    if not _proxy_cycle:
-        return None
+    """Navbatdagi (index, proxy_tuple) juftligini qaytaradi. Proksi sozlanmagan bo'lsa (None, None)."""
+    if not config.PROXIES:
+        return None, None
     async with _proxy_lock:
-        return next(_proxy_cycle)
+        idx = next(_proxy_counter) % len(config.PROXIES)
+        return idx, config.PROXIES[idx]
 
 
 def _random_device():
@@ -98,7 +100,18 @@ async def create_client(
 
 
 async def get_client(user_db_id: int, session_string: str) -> Optional[TelegramClient]:
-    """Get or restore a client from session string."""
+    """
+    Get or restore a client from session string.
+
+    MUHIM: Bu foydalanuvchi login qilganda unga biriktirilgan proksi va
+    qurilma fingerprintini DB'dan o'qib, AYNAN o'shani qayta ishlatadi.
+    Shu orqali "login boshqa IP'dan, keyingi foydalanish boshqa IP'dan"
+    bo'lib, Telegram akkauntni avtomatik chiqarib yubormasligi ta'minlanadi.
+    Bunday biriktirilgan proksi topilmasa (masalan, eski, proksi tizimi
+    qo'shilishidan oldin ulangan akkauntlar) — proksisiz, to'g'ridan-to'g'ri
+    ulanadi (ular ham shunday ulangan edi, shuning uchun bu izchillikni
+    buzmaydi).
+    """
     if user_db_id in _clients:
         client = _clients[user_db_id]
         if client.is_connected():
@@ -111,8 +124,10 @@ async def get_client(user_db_id: int, session_string: str) -> Optional[TelegramC
             logger.warning(f"Client reconnect failed for user {user_db_id}: {e}")
         del _clients[user_db_id]
 
+    proxy, device = await _get_assigned_proxy_and_device(user_db_id)
+
     try:
-        client = await create_client(user_db_id, session_string)
+        client = await create_client(user_db_id, session_string, proxy=proxy, device_profile=device)
         await client.connect()
         if await client.is_user_authorized():
             _clients[user_db_id] = client
@@ -122,9 +137,40 @@ async def get_client(user_db_id: int, session_string: str) -> Optional[TelegramC
     return None
 
 
-async def send_code(phone: str) -> tuple[TelegramClient, any]:
+async def _get_assigned_proxy_and_device(user_db_id: int):
+    """Foydalanuvchiga login paytida biriktirilgan proksi/qurilmani DB'dan o'qiydi."""
+    try:
+        from app.database import get_user_by_db_id  # lazy import — aylanma import'dan qochish uchun
+        user = await get_user_by_db_id(user_db_id)
+        if not user:
+            return None, None
+
+        proxy = None
+        if user.proxy_index is not None and config.PROXIES and 0 <= user.proxy_index < len(config.PROXIES):
+            proxy = config.PROXIES[user.proxy_index]
+
+        device = None
+        if user.device_model:
+            device = (
+                user.device_model,
+                user.device_system_version or "Windows 10",
+                user.device_app_version or "Telegram Desktop",
+            )
+        return proxy, device
+    except Exception as e:
+        logger.warning(f"Foydalanuvchi {user_db_id} uchun proksi/qurilma ma'lumotini o'qib bo'lmadi: {e}")
+        return None, None
+
+
+async def send_code(phone: str) -> tuple:
     """
     Telefon raqamga kirish kodini yuboradi.
+
+    Qaytaradi: (client, result, proxy_index, device_profile)
+    — chaqiruvchi tomon (phone.py) muvaffaqiyatli kirishdan so'ng shu
+    proxy_index va device_profile'ni foydalanuvchiga DOIMIY biriktirib
+    saqlashi kerak, shunda keyingi barcha ulanishlar (get_client orqali)
+    ham AYNAN shu proksi/qurilmadan foydalanadi.
 
     - Sozlangan bo'lsa, navbatdagi proksidan foydalanadi (rotatsiya) —
       shunda ketma-ket kelgan urinishlar boshqa-boshqa IP'dan ko'rinadi.
@@ -149,7 +195,7 @@ async def send_code(phone: str) -> tuple[TelegramClient, any]:
     last_error = None
 
     for attempt in range(attempts):
-        proxy = await _next_proxy()
+        proxy_index, proxy = await _next_proxy()
         device = _random_device()
         client = await create_client(0, proxy=proxy, device_profile=device)
 
@@ -167,10 +213,10 @@ async def send_code(phone: str) -> tuple[TelegramClient, any]:
         try:
             result = await client.send_code_request(phone)
             if proxy:
-                logger.info(f"Kod so'rovi yuborildi: {phone} — proksi orqali ({proxy[1]})")
+                logger.info(f"Kod so'rovi yuborildi: {phone} — proksi orqali ({proxy[1]}, index={proxy_index})")
             else:
                 logger.info(f"Kod so'rovi yuborildi: {phone} — proksisiz (to'g'ridan-to'g'ri)")
-            return client, result
+            return client, result, proxy_index, device
 
         except errors.FloodWaitError as e:
             logger.warning(f"FloodWait {e.seconds}s — {phone} uchun kod so'rovida (proksi: {proxy})")
