@@ -241,3 +241,48 @@ python main.py
 
 **Session expired:**
 - User must reconnect via 📱 Add Number
+
+---
+
+## 🌐 Railway (yoki boshqa server)da "kod kelmayabdi" muammosi
+
+**Sabab:** Bitta serverdan (Railway, VPS va h.k.) bir nechta akkaunt ulanmoqchi
+bo'lganingizda, Telegram bir xil IP manzildan ketma-ket kelayotgan "kod yubor"
+so'rovlarini bot-farm urinishi deb hisoblab, ma'lum sondan keyin ba'zi
+raqamlarga kodni **yubormay qo'yishi** mumkin (so'rov botga "muvaffaqiyatli"
+qaytadi, lekin foydalanuvchiga SMS/Telegram kodi kelmaydi). Lokal kompyuterda
+muammo bo'lmasligi sababi — odatda uy IP manzili Telegram nazarida "toza" va
+kamdan-kam shubhali hisoblanadi, Railway kabi hosting IP'lari esa ko'p botlar
+tomonidan ishlatilgani uchun tezroq cheklanadi.
+
+**Botda nima qilingan:**
+- Agar `.env` faylida `PROXIES` sozlansa, har bir yangi login urinishi
+  navbatdagi (boshqa) proksidan foydalanadi — shu bilan Telegram uchun
+  so'rovlar bir nechta turli IP'dan kelayotgandek ko'rinadi.
+- Har bir yangi login uchun tasodifiy, lekin haqiqiy qurilma ko'rinishi
+  (Samsung, iPhone, Windows va h.k.) tanlanadi — barcha urinishlar bir xil
+  "qurilma"dan kelayotganday ko'rinmaydi.
+- So'rovlar orasida eng kamida bir necha soniyalik pauza saqlanadi.
+- Telegram haqiqatan ham vaqtinchalik cheklov (FloodWait) qo'ysa, bot buni
+  aniq ko'rsatadi ("taxminan N daqiqadan keyin urinib ko'ring") — avvalgidek
+  "kod yuborildi" deb yolg'on ma'lumot bermaydi.
+
+**Sizdan talab qilinadigan qadam — PROXIES sozlash:**
+1. SOCKS5 proksi xizmati sotib oling (residential/mobile proksilar eng
+   yaxshi natija beradi; oddiy datacenter proksilar ham Railway'nikidan
+   yaxshiroq, lekin ba'zan ular ham cheklanishi mumkin — bepul/umumiy
+   proksilardan saqlaning, ular ko'pincha allaqachon bloklangan bo'ladi).
+2. Har bir proksini `.env` dagi `PROXIES` ga qo'shing:
+   ```
+   PROXIES=1.2.3.4:1080:user1:pass1,5.6.7.8:1080:user2:pass2
+   ```
+3. Nechta akkauntni bir vaqtda ulamoqchi bo'lsangiz, shuncha (yoki undan
+   kamroq — chunki bot ularni aylantirib ishlatadi) proksi qo'shish tavsiya
+   etiladi.
+
+⚠️ **Muhim, halol ogohlantirish:** `PROXIES` bo'sh qoldirilsa, bot avvalgidek
+Railway'ning bitta umumiy IP'idan ishlaydi — kod ketma-ket ko'p akkaunt uchun
+kelmasligi ehtimoli baribir qoladi, chunki bu Telegramning o'z tomonidagi
+cheklov, uni faqat haqiqiy, turli IP manzillar (ya'ni real proksilar) orqali
+"aylanib o'tish" mumkin. Kodni o'zi sun'iy ravishda "har doim kep-kelaveradigan"
+qilib bo'lmaydi — bu Telegram serverining xavfsizlik siyosati.

@@ -18,6 +18,18 @@ class Config:
     SESSIONS_DIR: str = "data/sessions"
     LOGS_DIR: str = "logs"
 
+    # Proksi ro'yxati (ixtiyoriy, lekin ko'p akaunt bilan bitta serverdan (masalan,
+    # Railway) ulanganda TAVSIYA ETILADI). Har bir yangi "raqam ulash" urinishi
+    # shu ro'yxatdagi navbatdagi proksidan foydalanadi — shunda Telegram
+    # tomonidan barcha so'rovlar bitta IP'dan kelayotgani ko'rinmaydi.
+    #
+    # .env da PROXIES o'zgaruvchisiga vergul bilan ajratib yoziladi:
+    #   PROXIES=host1:port1:user1:pass1,host2:port2:user2:pass2,host3:port3
+    # (username/password ixtiyoriy). Bo'sh qoldirilsa — proksisiz, to'g'ridan-to'g'ri
+    # ulanadi (Railway'ning umumiy IP'si tez-tez cheklovga uchraydi).
+    PROXY_TYPE: str = os.getenv("PROXY_TYPE", "socks5")
+    PROXIES_RAW: str = os.getenv("PROXIES", "")
+
     # Yuborish intervali variantlari (daqiqada) — E'lon yuborish bo'limida ko'rsatiladi
     BROADCAST_INTERVALS = [7, 10, 15, 20]
 
@@ -38,6 +50,24 @@ class Config:
         self.ADMIN_USERNAME = (self.ADMIN_USERNAME or "admin").strip().lstrip("@")
         os.makedirs(self.SESSIONS_DIR, exist_ok=True)
         os.makedirs(self.LOGS_DIR, exist_ok=True)
+
+        # PROXIES qatorini tuple'lar ro'yxatiga aylantiramiz:
+        # (proxy_type, host, port, username_yoki_None, password_yoki_None)
+        self.PROXIES = []
+        for entry in self.PROXIES_RAW.split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            parts = entry.split(":")
+            try:
+                if len(parts) == 2:
+                    host, port = parts
+                    self.PROXIES.append((self.PROXY_TYPE, host, int(port), None, None))
+                elif len(parts) == 4:
+                    host, port, user, pwd = parts
+                    self.PROXIES.append((self.PROXY_TYPE, host, int(port), user, pwd))
+            except ValueError:
+                pass
 
 
 config = Config()

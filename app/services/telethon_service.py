@@ -1,6 +1,9 @@
 import asyncio
+import itertools
 import logging
 import os
+import random
+import time
 from typing import Optional, List, Dict
 
 from telethon import TelegramClient, errors
@@ -15,34 +18,81 @@ logger = logging.getLogger(__name__)
 
 _clients: Dict[int, TelegramClient] = {}
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Proksi rotatsiyasi + qurilma fingerprint randomizatsiyasi.
+#
+# SABAB: bitta serverdan (masalan, Railway) ko'plab akkauntlar UCHUN ketma-ket
+# "kod yubor" (send_code) so'rovi bir xil IP + bir xil "qurilma" bilan borsa,
+# Telegramning firibgarlikka qarshi tizimi buni shubhali (bot-farm) deb topib,
+# ma'lum sondan keyin ba'zi so'rovlarga kodni jo'natishni cheklab/kechiktirib
+# qo'yadi (so'rov "muvaffaqiyatli" qaytsa ham, kod haqiqatda kelmaydi).
+# Shu sababli PROXIES sozlangan bo'lsa, har bir yangi login urinishi navbatdagi
+# boshqa proksidan va boshqa (tasodifiy) qurilma fingerprint bilan yuboriladi.
+# ─────────────────────────────────────────────────────────────────────────────
 
-def _get_proxy():
-    """Proxy sozlamasini qaytaradi."""
-    host = getattr(config, "PROXY_HOST", "") or ""
-    port = getattr(config, "PROXY_PORT", 0) or 0
-    if host and port:
-        return ("socks5", host, int(port))
-    return None
+_proxy_cycle = itertools.cycle(config.PROXIES) if config.PROXIES else None
+_proxy_lock = asyncio.Lock()
+
+# Haqiqiy, keng tarqalgan qurilmalar ko'rinishidagi fingerprintlar to'plami —
+# har bir yangi login shulardan tasodifiy birini oladi.
+DEVICE_PROFILES = [
+    ("PC 64bit", "Windows 10", "Telegram Desktop 4.16.8"),
+    ("PC 64bit", "Windows 11", "Telegram Desktop 4.16.4"),
+    ("Samsung SM-G991B", "Android 13", "Telegram Android 10.9.2"),
+    ("Samsung SM-A536B", "Android 14", "Telegram Android 10.12.0"),
+    ("Xiaomi Redmi Note 12", "Android 13", "Telegram Android 10.10.1"),
+    ("iPhone 13", "iOS 17.4", "Telegram iOS 10.9.3"),
+    ("iPhone 14 Pro", "iOS 17.5", "Telegram iOS 10.10.0"),
+    ("MacBook Pro", "macOS 14.4", "Telegram macOS 10.9"),
+]
+
+_last_send_code_at = 0.0
+MIN_GAP_SECONDS = 4  # ketma-ket kod so'rovlari orasidagi eng kam pauza
 
 
-async def create_client(user_db_id: int, session_string: str = None) -> TelegramClient:
+class FloodWaitException(Exception):
+    """Telegram vaqtincha yangi kod/kirish so'rovlarini cheklaganda ko'tariladi."""
+    def __init__(self, seconds: int):
+        self.seconds = seconds
+        super().__init__(f"FloodWait: {seconds}s")
+
+
+async def _next_proxy():
+    if not _proxy_cycle:
+        return None
+    async with _proxy_lock:
+        return next(_proxy_cycle)
+
+
+def _random_device():
+    return random.choice(DEVICE_PROFILES)
+
+
+async def create_client(
+    user_db_id: int,
+    session_string: str = None,
+    proxy=None,
+    device_profile: tuple = None,
+) -> TelegramClient:
     if session_string:
         session = StringSession(session_string)
     else:
         session = StringSession()
 
-    proxy = _get_proxy()
+    device_model, system_version, app_version = device_profile or ("PC 64bit", "Windows 10", "Telegram Desktop")
 
     client = TelegramClient(
         session,
         config.API_ID,
         config.API_HASH,
-        device_model="PC 64bit",
-        system_version="Windows 10",
-        app_version="Telegram Desktop",
-        lang_code="en",
-        system_lang_code="en-US",
+        device_model=device_model,
+        system_version=system_version,
+        app_version=app_version,
+        lang_code="uz",
+        system_lang_code="uz-UZ",
         proxy=proxy,
+        connection_retries=3,
+        timeout=15,
     )
     return client
 
@@ -73,11 +123,76 @@ async def get_client(user_db_id: int, session_string: str) -> Optional[TelegramC
 
 
 async def send_code(phone: str) -> tuple[TelegramClient, any]:
-    """Send login code to phone number."""
-    client = await create_client(0)
-    await client.connect()
-    result = await client.send_code_request(phone)
-    return client, result
+    """
+    Telefon raqamga kirish kodini yuboradi.
+
+    - Sozlangan bo'lsa, navbatdagi proksidan foydalanadi (rotatsiya) —
+      shunda ketma-ket kelgan urinishlar boshqa-boshqa IP'dan ko'rinadi.
+    - Har safar tasodifiy (lekin haqiqiy) qurilma fingerprinti tanlanadi.
+    - So'rovlar orasida eng kamida MIN_GAP_SECONDS pauza saqlanadi (portlash
+      shaklidagi so'rovlar Telegram tomonidan tezroq shubhali deb topiladi).
+    - Agar biror proksi ishlamasa (masalan, o'lik/bloklangan bo'lsa),
+      navbatdagi proksiga avtomatik o'tiladi.
+    - Telegram FloodWait qaytarsa, aniq kutish vaqti bilan FloodWaitException
+      ko'tariladi (chaqiruvchi tomon foydalanuvchiga tushunarli xabar
+      ko'rsatishi uchun).
+    """
+    global _last_send_code_at
+
+    async with _proxy_lock:
+        elapsed = time.time() - _last_send_code_at
+        if elapsed < MIN_GAP_SECONDS:
+            await asyncio.sleep(MIN_GAP_SECONDS - elapsed)
+        _last_send_code_at = time.time()
+
+    attempts = max(1, len(config.PROXIES)) if config.PROXIES else 1
+    last_error = None
+
+    for attempt in range(attempts):
+        proxy = await _next_proxy()
+        device = _random_device()
+        client = await create_client(0, proxy=proxy, device_profile=device)
+
+        try:
+            await client.connect()
+        except Exception as e:
+            logger.warning(f"Proksi bilan ulanib bo'lmadi ({proxy}): {e}. Keyingisiga o'tilmoqda...")
+            last_error = e
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+            continue
+
+        try:
+            result = await client.send_code_request(phone)
+            if proxy:
+                logger.info(f"Kod so'rovi yuborildi: {phone} — proksi orqali ({proxy[1]})")
+            else:
+                logger.info(f"Kod so'rovi yuborildi: {phone} — proksisiz (to'g'ridan-to'g'ri)")
+            return client, result
+
+        except errors.FloodWaitError as e:
+            logger.warning(f"FloodWait {e.seconds}s — {phone} uchun kod so'rovida (proksi: {proxy})")
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+            raise FloodWaitException(e.seconds)
+
+        except Exception as e:
+            last_error = e
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+            # Ulanish/tarmoq xatosi bo'lsa keyingi proksini sinaymiz;
+            # aks holda (masalan, noto'g'ri raqam) darhol xatoni ko'taramiz.
+            if attempt < attempts - 1 and isinstance(e, (ConnectionError, OSError, asyncio.TimeoutError)):
+                continue
+            raise
+
+    raise last_error or RuntimeError("Kod yuborib bo'lmadi: barcha proksilar ishlamadi.")
 
 
 async def sign_in(client: TelegramClient, phone: str, code: str, phone_code_hash: str, password: str = None):

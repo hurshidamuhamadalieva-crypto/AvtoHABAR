@@ -252,6 +252,19 @@ async def _process_phone(message: Message, state: FSMContext, phone: str):
             reply_markup=kb_cancel_inline("phone:cancel")
         )
 
+    except telethon_service.FloodWaitException as e:
+        minutes = max(1, e.seconds // 60)
+        logger.warning(f"FloodWait {e.seconds}s — {phone} uchun")
+        await message.answer(
+            "⏳ <b>Telegram vaqtincha yangi kod so'rovlarini cheklab qo'ydi.</b>\n\n"
+            f"Iltimos, taxminan <b>{minutes} daqiqadan</b> so'ng qayta urinib ko'ring.\n\n"
+            "💡 Bu — bitta IP manzildan ko'p urinish qilinganda Telegram tomonidan "
+            "qo'yiladigan vaqtinchalik cheklov, xatolik emas.",
+            parse_mode="HTML",
+            reply_markup=kb_cancel_inline("phone:cancel")
+        )
+        await state.set_state(PhoneFlow.entering_phone)
+
     except Exception as e:
         logger.error(f"Kod yuborishda xato {phone}: {e}")
         await message.answer(
