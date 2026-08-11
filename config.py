@@ -51,8 +51,13 @@ class Config:
         os.makedirs(self.SESSIONS_DIR, exist_ok=True)
         os.makedirs(self.LOGS_DIR, exist_ok=True)
 
-        # PROXIES qatorini tuple'lar ro'yxatiga aylantiramiz:
-        # (proxy_type, host, port, username_yoki_None, password_yoki_None)
+        # PROXIES qatorini tuple'lar ro'yxatiga aylantiramiz.
+        # MUHIM: Telethon (PySocks orqali) proksi tuple'ini aynan
+        # (proxy_type, host, port, rdns, username, password) tartibida kutadi —
+        # "rdns" (4-o'rin, odatda True) qismini qo'shmasak, PySocks
+        # username/parolni noto'g'ri joyga o'qib, autentifikatsiyani rad etadi
+        # ("All offered SOCKS5 authentication methods were rejected" xatosi
+        # aynan shundan kelib chiqqan edi).
         self.PROXIES = []
         for entry in self.PROXIES_RAW.split(","):
             entry = entry.strip()
@@ -62,10 +67,10 @@ class Config:
             try:
                 if len(parts) == 2:
                     host, port = parts
-                    self.PROXIES.append((self.PROXY_TYPE, host, int(port), None, None))
+                    self.PROXIES.append((self.PROXY_TYPE, host, int(port), True, None, None))
                 elif len(parts) == 4:
                     host, port, user, pwd = parts
-                    self.PROXIES.append((self.PROXY_TYPE, host, int(port), user, pwd))
+                    self.PROXIES.append((self.PROXY_TYPE, host, int(port), True, user, pwd))
             except ValueError:
                 pass
 
