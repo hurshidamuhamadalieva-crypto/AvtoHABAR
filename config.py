@@ -30,6 +30,21 @@ class Config:
     PROXY_TYPE: str = os.getenv("PROXY_TYPE", "socks5")
     PROXIES_RAW: str = os.getenv("PROXIES", "")
 
+    # Yangi ulangan akkauntga "isinib olish" uchun beriladigan vaqt (daqiqada).
+    # Shu vaqt ichida akkaunt orqali og'ir so'rov (masalan, barcha guruhlarni
+    # olish) yuborilmaydi — chunki yangi sessiyada darhol bunday og'ir so'rov
+    # yuborish Telegram tomonidan shubhali (akkaunt o'g'irlash/skraping)
+    # deb topilib, akkauntni avtomatik chiqarib yuborishga sabab bo'lgan edi.
+    # Qiymatni oshirsangiz (masalan 10 yoki 30) xavfsizlik yanada oshadi,
+    # lekin foydalanuvchi shuncha ko'proq kutishi kerak bo'ladi.
+    WARMUP_MINUTES: int = int(os.getenv("WARMUP_MINUTES", "3"))
+
+    # Har necha daqiqada barcha ulangan akkauntlarning sessiyasi hali ham
+    # amal qilayotganini yengil tekshiradi (faqat is_user_authorized —
+    # hech qanday og'ir/ko'p so'rov yo'q). Bekor qilingan sessiyani DARHOL
+    # aniqlab, foydalanuvchiga xabar berish uchun ishlatiladi.
+    SESSION_HEALTH_CHECK_MINUTES: int = int(os.getenv("SESSION_HEALTH_CHECK_MINUTES", "15"))
+
     # Yuborish intervali variantlari (daqiqada) — E'lon yuborish bo'limida ko'rsatiladi
     BROADCAST_INTERVALS = [7, 10, 15, 20]
 

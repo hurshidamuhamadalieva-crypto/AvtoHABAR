@@ -57,13 +57,48 @@ class FloodWaitException(Exception):
         super().__init__(f"FloodWait: {seconds}s")
 
 
+class SessionRevokedException(Exception):
+    """
+    Foydalanuvchining sessiyasi Telegram tomonidan bekor qilingan/chiqarib
+    yuborilgan (masalan, foydalanuvchi qurilmalar ro'yxatidan o'chirgan,
+    yoki Telegramning xavfsizlik tizimi shubhali deb topib yopgan).
+    Bu holatda foydalanuvchi hisobni QAYTA ulashi kerak.
+    """
+    pass
+
+
+class AccountBannedException(Exception):
+    """
+    Telegram AKKAUNTNING O'ZINI (raqamning o'zini) bloklagan — bu
+    sessiyaning bekor qilinishidan farqli, akkauntning o'zi ishlamay
+    qoladi, qayta ulash yordam bermaydi.
+    """
+    pass
+
+
+def _proxy_key(proxy_tuple) -> Optional[str]:
+    if not proxy_tuple:
+        return None
+    return f"{proxy_tuple[1]}:{proxy_tuple[2]}"
+
+
+def _find_proxy_by_key(key: str):
+    if not key or not config.PROXIES:
+        return None
+    for p in config.PROXIES:
+        if _proxy_key(p) == key:
+            return p
+    return None
+
+
 async def _next_proxy():
-    """Navbatdagi (index, proxy_tuple) juftligini qaytaradi. Proksi sozlanmagan bo'lsa (None, None)."""
+    """Navbatdagi (proxy_key, proxy_tuple) juftligini qaytaradi. Proksi sozlanmagan bo'lsa (None, None)."""
     if not config.PROXIES:
         return None, None
     async with _proxy_lock:
         idx = next(_proxy_counter) % len(config.PROXIES)
-        return idx, config.PROXIES[idx]
+        proxy = config.PROXIES[idx]
+        return _proxy_key(proxy), proxy
 
 
 def _random_device():
@@ -99,42 +134,98 @@ async def create_client(
     return client
 
 
+_client_locks: Dict[int, asyncio.Lock] = {}
+
+
+def _get_client_lock(user_db_id: int) -> asyncio.Lock:
+    """
+    Har bir foydalanuvchi uchun ALOHIDA lock — bir vaqtning o'zida ikkita
+    joy (masalan, "Guruh qo'shish" bosilishi va fon jarayonidagi yuborish
+    sikli) bir xil sessiya bilan PARALLEL ravishda ikkita ulanish
+    ochib yubormasligi uchun. Bu MUHIM: Telegram bitta sessiya (auth key)
+    bir vaqtda bir nechta joydan parallel ulanganini "shubhali/dublikat"
+    deb aniqlab, sessiyani avtomatik bekor qilishi mumkin edi —
+    aynan shu turdagi tasodifiy poyga holati (race condition) sababli.
+    """
+    lock = _client_locks.get(user_db_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _client_locks[user_db_id] = lock
+    return lock
+
+
+async def _safe_disconnect(client: TelegramClient):
+    try:
+        await client.disconnect()
+    except Exception:
+        pass
+
+
 async def get_client(user_db_id: int, session_string: str) -> Optional[TelegramClient]:
     """
     Get or restore a client from session string.
 
-    MUHIM: Bu foydalanuvchi login qilganda unga biriktirilgan proksi va
-    qurilma fingerprintini DB'dan o'qib, AYNAN o'shani qayta ishlatadi.
-    Shu orqali "login boshqa IP'dan, keyingi foydalanish boshqa IP'dan"
-    bo'lib, Telegram akkauntni avtomatik chiqarib yubormasligi ta'minlanadi.
-    Bunday biriktirilgan proksi topilmasa (masalan, eski, proksi tizimi
-    qo'shilishidan oldin ulangan akkauntlar) — proksisiz, to'g'ridan-to'g'ri
-    ulanadi (ular ham shunday ulangan edi, shuning uchun bu izchillikni
-    buzmaydi).
+    MUHIM:
+    - Foydalanuvchi login qilganda unga biriktirilgan proksi va qurilma
+      fingerprintini DB'dan o'qib, AYNAN o'shani qayta ishlatadi (login
+      va keyingi foydalanish bir xil IP'dan bo'lishi uchun).
+    - Har bir foydalanuvchi uchun lock ostida ishlaydi — bir xil sessiya
+      bilan ikkita parallel ulanish hech qachon ochilmaydi.
+    - Sessiya Telegram tomonidan bekor qilingan/akkaunt bloklangan bo'lsa,
+      buni ANIQ aniqlab (SessionRevokedException / AccountBannedException),
+      chaqiruvchi tomonga signal beradi — shunda bot foydalanuvchiga
+      DARHOL to'g'ri xabar bera oladi va bazani tozalab, "ulanmagan"
+      holatiga qaytaradi (aks holda foydalanuvchi buni sezmay, bot esa
+      "sukut bo'yicha ishlamay qolgan" holatda qolib ketardi).
     """
-    if user_db_id in _clients:
-        client = _clients[user_db_id]
-        if client.is_connected():
-            return client
+    lock = _get_client_lock(user_db_id)
+    async with lock:
+        client = _clients.get(user_db_id)
+        if client is not None:
+            try:
+                if not client.is_connected():
+                    await client.connect()
+                authorized = await client.is_user_authorized()
+            except errors.UserDeactivatedBanError:
+                await _safe_disconnect(client)
+                _clients.pop(user_db_id, None)
+                raise AccountBannedException("Akkaunt Telegram tomonidan bloklangan.")
+            except (errors.AuthKeyUnregisteredError, errors.SessionRevokedError, errors.AuthKeyDuplicatedError) as e:
+                await _safe_disconnect(client)
+                _clients.pop(user_db_id, None)
+                raise SessionRevokedException(f"Sessiya bekor qilingan: {e}")
+            except Exception as e:
+                logger.warning(f"Client reconnect failed for user {user_db_id}: {e}")
+                await _safe_disconnect(client)
+                _clients.pop(user_db_id, None)
+                client = None
+            else:
+                if authorized:
+                    return client
+                await _safe_disconnect(client)
+                _clients.pop(user_db_id, None)
+                raise SessionRevokedException("Sessiya endi amal qilmaydi.")
+
+        proxy, device = await _get_assigned_proxy_and_device(user_db_id)
+
         try:
+            client = await create_client(user_db_id, session_string, proxy=proxy, device_profile=device)
             await client.connect()
-            if await client.is_user_authorized():
-                return client
+            authorized = await client.is_user_authorized()
+        except errors.UserDeactivatedBanError:
+            raise AccountBannedException("Akkaunt Telegram tomonidan bloklangan.")
+        except (errors.AuthKeyUnregisteredError, errors.SessionRevokedError, errors.AuthKeyDuplicatedError) as e:
+            raise SessionRevokedException(f"Sessiya bekor qilingan: {e}")
         except Exception as e:
-            logger.warning(f"Client reconnect failed for user {user_db_id}: {e}")
-        del _clients[user_db_id]
+            logger.error(f"Failed to restore client for user {user_db_id}: {e}")
+            return None
 
-    proxy, device = await _get_assigned_proxy_and_device(user_db_id)
-
-    try:
-        client = await create_client(user_db_id, session_string, proxy=proxy, device_profile=device)
-        await client.connect()
-        if await client.is_user_authorized():
+        if authorized:
             _clients[user_db_id] = client
             return client
-    except Exception as e:
-        logger.error(f"Failed to restore client for user {user_db_id}: {e}")
-    return None
+
+        await _safe_disconnect(client)
+        raise SessionRevokedException("Sessiya endi amal qilmaydi (yangi ulanishda).")
 
 
 async def _get_assigned_proxy_and_device(user_db_id: int):
@@ -146,7 +237,16 @@ async def _get_assigned_proxy_and_device(user_db_id: int):
             return None, None
 
         proxy = None
-        if user.proxy_index is not None and config.PROXIES and 0 <= user.proxy_index < len(config.PROXIES):
+        proxy_key = getattr(user, "proxy_key", None)
+        if proxy_key:
+            proxy = _find_proxy_by_key(proxy_key)
+            if proxy is None:
+                logger.warning(
+                    f"Foydalanuvchi {user_db_id} uchun biriktirilgan proksi "
+                    f"({proxy_key}) endi PROXIES ro'yxatida yo'q — proksisiz ulanadi."
+                )
+        elif user.proxy_index is not None and config.PROXIES and 0 <= user.proxy_index < len(config.PROXIES):
+            # Legacy: eski (proxy_key qo'shilishidan oldingi) akkauntlar uchun zaxira yo'l
             proxy = config.PROXIES[user.proxy_index]
 
         device = None
@@ -166,9 +266,9 @@ async def send_code(phone: str) -> tuple:
     """
     Telefon raqamga kirish kodini yuboradi.
 
-    Qaytaradi: (client, result, proxy_index, device_profile)
+    Qaytaradi: (client, result, proxy_key, device_profile)
     — chaqiruvchi tomon (phone.py) muvaffaqiyatli kirishdan so'ng shu
-    proxy_index va device_profile'ni foydalanuvchiga DOIMIY biriktirib
+    proxy_key va device_profile'ni foydalanuvchiga DOIMIY biriktirib
     saqlashi kerak, shunda keyingi barcha ulanishlar (get_client orqali)
     ham AYNAN shu proksi/qurilmadan foydalanadi.
 
@@ -195,7 +295,7 @@ async def send_code(phone: str) -> tuple:
     last_error = None
 
     for attempt in range(attempts):
-        proxy_index, proxy = await _next_proxy()
+        proxy_key, proxy = await _next_proxy()
         device = _random_device()
         client = await create_client(0, proxy=proxy, device_profile=device)
 
@@ -213,10 +313,10 @@ async def send_code(phone: str) -> tuple:
         try:
             result = await client.send_code_request(phone)
             if proxy:
-                logger.info(f"Kod so'rovi yuborildi: {phone} — proksi orqali ({proxy[1]}, index={proxy_index})")
+                logger.info(f"Kod so'rovi yuborildi: {phone} — proksi orqali ({proxy_key})")
             else:
                 logger.info(f"Kod so'rovi yuborildi: {phone} — proksisiz (to'g'ridan-to'g'ri)")
-            return client, result, proxy_index, device
+            return client, result, proxy_key, device
 
         except errors.FloodWaitError as e:
             logger.warning(f"FloodWait {e.seconds}s — {phone} uchun kod so'rovida (proksi: {proxy})")
@@ -271,6 +371,8 @@ async def get_dialog_folders(user_db_id: int, session_string: str) -> List[Dict]
                     "filter": f,
                 })
         return folders
+    except (SessionRevokedException, AccountBannedException):
+        raise
     except Exception as e:
         logger.error(f"Error getting folders for user {user_db_id}: {e}")
         return []
@@ -284,7 +386,12 @@ async def get_groups_from_folder(user_db_id: int, session_string: str, folder_fi
 
     groups = []
     try:
-        # Get all dialogs
+        # Barcha suhbatlarni olish — MUHIM: bitta uzluksiz "portlash" tarzida
+        # emas, insonga o'xshab, bir necha suhbatdan keyin qisqa pauza bilan.
+        # Yangi sessiyada darhol yuzlab suhbatni bir zumda so'rash Telegramning
+        # firibgarlikka qarshi tizimiga "akkaunt skraping qilinyapti" signalini
+        # berib, akkauntni avtomatik chiqarib yuborishiga sabab bo'lgan edi.
+        count = 0
         async for dialog in client.iter_dialogs():
             entity = dialog.entity
             if isinstance(entity, (Channel, Chat)):
@@ -302,6 +409,10 @@ async def get_groups_from_folder(user_db_id: int, session_string: str, folder_fi
                         "username": getattr(entity, "username", None),
                     })
 
+            count += 1
+            if count % 12 == 0:
+                await asyncio.sleep(random.uniform(0.4, 0.9))
+
         # Filter by folder if folder_filter has include_peers
         if folder_filter and hasattr(folder_filter, 'include_peers') and folder_filter.include_peers:
             folder_ids = set()
@@ -314,6 +425,8 @@ async def get_groups_from_folder(user_db_id: int, session_string: str, folder_fi
             if folder_ids:
                 groups = [g for g in groups if abs(g["id"]) in folder_ids]
 
+    except (SessionRevokedException, AccountBannedException):
+        raise
     except Exception as e:
         logger.error(f"Error getting groups for user {user_db_id}: {e}")
 
@@ -328,6 +441,7 @@ async def get_all_groups(user_db_id: int, session_string: str) -> List[Dict]:
 
     groups = []
     try:
+        count = 0
         async for dialog in client.iter_dialogs():
             entity = dialog.entity
             if isinstance(entity, Chat):
@@ -342,6 +456,13 @@ async def get_all_groups(user_db_id: int, session_string: str) -> List[Dict]:
                     "title": entity.title,
                     "username": getattr(entity, "username", None),
                 })
+
+            count += 1
+            if count % 12 == 0:
+                await asyncio.sleep(random.uniform(0.4, 0.9))
+
+    except (SessionRevokedException, AccountBannedException):
+        raise
     except Exception as e:
         logger.error(f"Error getting all groups for user {user_db_id}: {e}")
 
@@ -407,6 +528,93 @@ async def disconnect_client(user_db_id: int):
         except Exception:
             pass
         del _clients[user_db_id]
+
+
+async def _clear_user_session(user_tg_id: int):
+    from app.database import update_user
+    await update_user(
+        user_tg_id,
+        session_string=None,
+        phone_number=None,
+        proxy_index=None,
+        proxy_key=None,
+        device_model=None,
+        device_system_version=None,
+        device_app_version=None,
+        session_connected_at=None,
+    )
+
+
+async def _notify_session_lost(bot, user_tg_id: int, banned: bool):
+    text = (
+        "🚫 <b>Akkauntingiz Telegram tomonidan bloklangan.</b>\n\n"
+        "Afsuski, bu holatda akkauntni qayta ulash yordam bermaydi — "
+        "boshqa raqam bilan urinib ko'ring."
+        if banned else
+        "⚠️ <b>Diqqat: hisobingiz uzilib qoldi!</b>\n\n"
+        "Telegram hisobingiz sabab (masalan, xavfsizlik tekshiruvi) bilan "
+        "uzildi va bot endi undan foydalana olmaydi.\n\n"
+        "Iltimos, <b>📱 Raqam qo'shish</b> orqali hisobingizni qayta ulang."
+    )
+    try:
+        await bot.send_message(user_tg_id, text, parse_mode="HTML")
+    except Exception as e:
+        logger.warning(f"Foydalanuvchi {user_tg_id} ga sessiya-uzilish xabarini yuborib bo'lmadi: {e}")
+
+
+async def handle_lost_session(bot, user_db_id: int, user_tg_id: int, banned: bool = False):
+    """
+    Sessiya bekor qilingani/akkaunt bloklangani ANIQLANGANDA chaqiriladi
+    (sending sikli yoki guruh olish paytida, yoxud fon health-check
+    tomonidan). Bazani darhol tozalaydi (bot to'g'ri "ulanmagan" holatini
+    ko'rsatishi uchun), aktiv yuborishni to'xtatadi va foydalanuvchiga
+    DARHOL xabar beradi.
+    """
+    logger.warning(f"Sessiya yo'qoldi: user_db_id={user_db_id}, banned={banned}")
+
+    try:
+        from app.services.sender_service import stop_all_for_user
+        await stop_all_for_user(user_db_id)
+    except Exception as e:
+        logger.warning(f"stop_all_for_user xatosi ({user_db_id}): {e}")
+
+    await disconnect_client(user_db_id)
+    await _clear_user_session(user_tg_id)
+    await _notify_session_lost(bot, user_tg_id, banned)
+
+
+async def session_health_checker(bot):
+    """
+    Fon vazifasi: har SESSION_HEALTH_CHECK_MINUTES daqiqada barcha ulangan
+    akkauntlarning sessiyasi hali ham amal qilayotganini YENGIL tekshiradi
+    (faqat is_user_authorized — hech qanday og'ir/ko'p so'rov yo'q, shuning
+    uchun bu tekshiruvning o'zi hech kimning akkauntiga xavf tug'dirmaydi).
+
+    Maqsad: Telegram biror sessiyani bekor qilsa, buni foydalanuvchi
+    o'zi payqamasdan (masalan, keyingi safar yuborish ishlamay qolganda
+    tasodifan bilib qolish o'rniga), bot DARHOL aniqlab, bazani to'g'ri
+    holatga qaytarib, foydalanuvchiga xabar beradi.
+    """
+    while True:
+        await asyncio.sleep(config.SESSION_HEALTH_CHECK_MINUTES * 60)
+        try:
+            from app.database import get_all_users
+            users = await get_all_users()
+            for user in users:
+                if not user.session_string:
+                    continue
+                try:
+                    await get_client(user.id, user.session_string)
+                except SessionRevokedException:
+                    await handle_lost_session(bot, user.id, user.telegram_id, banned=False)
+                except AccountBannedException:
+                    await handle_lost_session(bot, user.id, user.telegram_id, banned=True)
+                except Exception as e:
+                    logger.warning(f"session_health_checker: user {user.id} vaqtinchalik xato: {e}")
+                # Hammasini bir zumda tekshirmaslik — orasiga qisqa pauza
+                await asyncio.sleep(random.uniform(2, 5))
+        except Exception as e:
+            logger.error(f"session_health_checker umumiy xatosi: {e}", exc_info=True)
 
 
 # Import needed for get_dialog_folders

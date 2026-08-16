@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timedelta
 
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
@@ -8,6 +9,7 @@ from app.database import get_or_create_user, get_user_groups, save_groups
 from app.keyboards import kb_folders, kb_main_menu, kb_back_inline, kb_groups_menu, kb_confirm_clear_groups
 from app.states import GroupFlow
 from app.services import telethon_service
+from config import config
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -17,6 +19,20 @@ _user_folders = {}  # temp cache: user_tg_id -> [folder dicts]
 
 def _check_active(user) -> bool:
     return user and user.is_active and not user.is_banned
+
+
+def _warmup_remaining_seconds(user) -> int:
+    """
+    Akkaunt yaqinda ulangan bo'lsa, "isinish" davri tugashiga qancha
+    qolganini (soniyada) qaytaradi. Agar isinish davri allaqachon
+    tugagan bo'lsa yoki ulanish vaqti noma'lum bo'lsa (juda eski
+    akkauntlar) — 0 qaytaradi.
+    """
+    if not user.session_connected_at:
+        return 0
+    elapsed = datetime.utcnow() - user.session_connected_at
+    remaining = timedelta(minutes=config.WARMUP_MINUTES) - elapsed
+    return max(0, int(remaining.total_seconds()))
 
 
 @router.callback_query(F.data == "menu:groups")
@@ -69,6 +85,22 @@ async def cb_open_groups_menu(call: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "groups:choose_folder")
 async def cb_choose_folder(call: CallbackQuery, state: FSMContext):
     user = await get_or_create_user(call.from_user.id)
+
+    remaining = _warmup_remaining_seconds(user)
+    if remaining > 0:
+        minutes = remaining // 60 + (1 if remaining % 60 else 0)
+        await call.message.edit_text(
+            "⏳ <b>Hisobingiz hali \"isinib\" ulgurmadi</b>\n\n"
+            "Xavfsizlik uchun yangi ulangan hisobda guruhlarni darhol "
+            "olib bo'lmaydi — Telegram buni shubhali harakat deb "
+            "hisoblab, hisobingizni chiqarib yuborishi mumkin edi.\n\n"
+            f"⏱ Taxminan <b>{minutes} daqiqadan</b> so'ng qayta urinib ko'ring.",
+            parse_mode="HTML",
+            reply_markup=kb_back_inline("menu:home")
+        )
+        await call.answer()
+        return
+
     loading = await call.message.edit_text("⏳ <b>Jildlar yuklanmoqda...</b>", parse_mode="HTML")
 
     try:
@@ -110,6 +142,20 @@ async def cb_choose_folder(call: CallbackQuery, state: FSMContext):
             reply_markup=kb_folders(folders)
         )
 
+    except (telethon_service.SessionRevokedException, telethon_service.AccountBannedException) as e:
+        banned = isinstance(e, telethon_service.AccountBannedException)
+        await telethon_service.handle_lost_session(call.bot, user.id, call.from_user.id, banned=banned)
+        await loading.edit_text(
+            "🚫 <b>Akkauntingiz bloklangan.</b>\n\nBoshqa raqam bilan urinib ko'ring."
+            if banned else
+            "⚠️ <b>Hisobingiz uzilib qoldi!</b>\n\n"
+            "Telegram hisobingiz uzilgani aniqlandi va bazadan tozalandi.\n"
+            "Iltimos, <b>📱 Raqam qo'shish</b> orqali qayta ulang.",
+            parse_mode="HTML",
+            reply_markup=kb_back_inline("menu:home")
+        )
+        await call.answer()
+        return
     except Exception as e:
         logger.error(f"Jildlarni yuklashda xato {call.from_user.id}: {e}")
         await loading.edit_text(
@@ -194,6 +240,20 @@ async def cb_folder_selected(call: CallbackQuery, state: FSMContext):
             reply_markup=kb_back_inline("groups:back")
         )
 
+    except (telethon_service.SessionRevokedException, telethon_service.AccountBannedException) as e:
+        banned = isinstance(e, telethon_service.AccountBannedException)
+        await telethon_service.handle_lost_session(call.bot, user.id, call.from_user.id, banned=banned)
+        await loading_msg.edit_text(
+            "🚫 <b>Akkauntingiz bloklangan.</b>\n\nBoshqa raqam bilan urinib ko'ring."
+            if banned else
+            "⚠️ <b>Hisobingiz uzilib qoldi!</b>\n\n"
+            "Telegram hisobingiz uzilgani aniqlandi va bazadan tozalandi.\n"
+            "Iltimos, <b>📱 Raqam qo'shish</b> orqali qayta ulang.",
+            parse_mode="HTML",
+            reply_markup=kb_back_inline("menu:home")
+        )
+        await call.answer()
+        return
     except Exception as e:
         logger.error(f"Guruhlarni import qilishda xato: {e}")
         await loading_msg.edit_text(

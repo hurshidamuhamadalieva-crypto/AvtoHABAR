@@ -2,6 +2,7 @@ import asyncio
 import logging
 import re
 import time
+from datetime import datetime
 
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
@@ -136,9 +137,11 @@ async def cb_confirm_disconnect(call: CallbackQuery, state: FSMContext):
         session_string=None,
         phone_number=None,
         proxy_index=None,
+        proxy_key=None,
         device_model=None,
         device_system_version=None,
         device_app_version=None,
+        session_connected_at=None,
     )
     await state.clear()
 
@@ -239,13 +242,13 @@ async def _process_phone(message: Message, state: FSMContext, phone: str):
     )
 
     try:
-        client, result, proxy_index, device = await telethon_service.send_code(phone)
+        client, result, proxy_key, device = await telethon_service.send_code(phone)
         _pending_logins[message.from_user.id] = {
             "client": client,
             "phone": phone,
             "phone_code_hash": result.phone_code_hash,
             "created_at": time.time(),
-            "proxy_index": proxy_index,
+            "proxy_key": proxy_key,
             "device": device,
         }
         await state.update_data(phone=phone)
@@ -322,10 +325,11 @@ async def receive_code(message: Message, state: FSMContext):
             message.from_user.id,
             session_string=session_string,
             phone_number=pending["phone"],
-            proxy_index=pending.get("proxy_index"),
+            proxy_key=pending.get("proxy_key"),
             device_model=device[0],
             device_system_version=device[1],
             device_app_version=device[2],
+            session_connected_at=datetime.utcnow(),
         )
 
         # Muvaqqat login klientini yopamiz — doimiy ulanish keyinchalik
@@ -414,10 +418,11 @@ async def receive_2fa_password(message: Message, state: FSMContext):
             message.from_user.id,
             session_string=session_string,
             phone_number=pending["phone"],
-            proxy_index=pending.get("proxy_index"),
+            proxy_key=pending.get("proxy_key"),
             device_model=device[0],
             device_system_version=device[1],
             device_app_version=device[2],
+            session_connected_at=datetime.utcnow(),
         )
 
         try:

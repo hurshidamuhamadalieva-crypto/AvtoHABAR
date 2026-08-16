@@ -43,10 +43,24 @@ class User(Base):
     # boshqa (yoki proksisiz) IP'dan bo'lsa, Telegram buni "shubhali,
     # boshqa joydan kirish" deb hisoblab, akkauntni avtomatik chiqarib
     # yuboradi — aynan shu muammo yuzaga kelgan edi.
-    proxy_index = Column(Integer, nullable=True)
+    proxy_index = Column(Integer, nullable=True)  # eski, legacy (endi ishlatilmaydi)
+    # proxy_key = "host:port" — proxy_index'dan farqli, PROXIES ro'yxati
+    # qayta tartiblansa/o'zgarsa ham foydalanuvchiga biriktirilgan aynan
+    # o'sha jismoniy proksini to'g'ri topib beradi (index esa ro'yxat
+    # tartibi o'zgarganda BOSHQA proksini "noto'g'ri" qaytarib, akkauntga
+    # kutilmagan IP almashinuvini keltirib chiqarishi mumkin edi).
+    proxy_key = Column(String(255), nullable=True)
     device_model = Column(String(128), nullable=True)
     device_system_version = Column(String(128), nullable=True)
     device_app_version = Column(String(128), nullable=True)
+
+    # Akkaunt QACHON ulanganini saqlaydi — yangi ulangan (bir necha daqiqa
+    # o'tmagan) akkauntda darhol og'ir so'rov (masalan, barcha guruhlarni
+    # so'rash) yubormaslik uchun ishlatiladi. Yangi sessiyada shunday
+    # "portlash" tarzidagi so'rov Telegram tomonidan shubhali (akkaunt
+    # o'g'irlash/skraping) deb topilib, akkauntni avtomatik chiqarib
+    # yuborishiga sabab bo'lishi mumkin edi.
+    session_connected_at = Column(DateTime, nullable=True)
 
     subscriptions = relationship("Subscription", back_populates="user", cascade="all, delete-orphan")
     payments = relationship("Payment", back_populates="user", cascade="all, delete-orphan")
@@ -165,9 +179,11 @@ async def _ensure_columns(conn):
         return
     required = {
         "proxy_index": "INTEGER",
+        "proxy_key": "VARCHAR(255)",
         "device_model": "VARCHAR(128)",
         "device_system_version": "VARCHAR(128)",
         "device_app_version": "VARCHAR(128)",
+        "session_connected_at": "DATETIME",
     }
     result = await conn.exec_driver_sql("PRAGMA table_info(users)")
     existing_cols = {row[1] for row in result.fetchall()}

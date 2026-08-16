@@ -13,6 +13,7 @@ from app.database import init_db
 from app.handlers import start, payment, phone, groups, broadcast, user_info, admin
 from app.middlewares.subscription import SubscriptionMiddleware, BanCheckCallbackMiddleware
 from app.services.scheduler import subscription_checker
+from app.services.telethon_service import session_health_checker
 from app.handlers.phone import cleanup_stale_logins
 
 logging.basicConfig(
@@ -62,6 +63,7 @@ async def main():
 
     asyncio.create_task(subscription_checker(bot))
     asyncio.create_task(cleanup_stale_logins())
+    asyncio.create_task(session_health_checker(bot))
     logger.info("✅ Fon vazifalar ishga tushdi.")
     logger.info("✅ Bot ishlamoqda. To'xtatish uchun Ctrl+C bosing.")
 

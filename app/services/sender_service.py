@@ -7,7 +7,10 @@ from app.database import (
     get_active_advertisement, get_user_groups,
     get_or_create_settings, update_settings, add_send_stat
 )
-from app.services.telethon_service import send_message_to_group
+from app.services.telethon_service import (
+    send_message_to_group, SessionRevokedException, AccountBannedException,
+    disconnect_client, _clear_user_session, _notify_session_lost,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -172,13 +175,20 @@ async def _sending_loop(bot, user_db_id: int, telegram_id: int, session_string: 
                 # Entity aniqlash: username bo'lsa ishlatamiz, bo'lmasa ID
                 entity = group.group_username if group.group_username else int(group.group_id)
 
-                success, error_msg = await _send_to_entity(
-                    client_session=session_string,
-                    user_db_id=user_db_id,
-                    entity=entity,
-                    text=ad.text,
-                )
-
+                try:
+                    success, error_msg = await _send_to_entity(
+                        client_session=session_string,
+                        user_db_id=user_db_id,
+                        entity=entity,
+                        text=ad.text,
+                    )
+                except (SessionRevokedException, AccountBannedException) as e:
+                    banned = isinstance(e, AccountBannedException)
+                    logger.warning(f"[{user_db_id}] Sessiya yo'qoldi (yuborish paytida): {e}")
+                    await disconnect_client(user_db_id)
+                    await _clear_user_session(telegram_id)
+                    await _notify_session_lost(bot, telegram_id, banned)
+                    return
                 await add_send_stat(
                     user_db_id=user_db_id,
                     group_id=group.group_id,
