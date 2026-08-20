@@ -10,6 +10,7 @@ from telethon import TelegramClient, errors
 from telethon.tl.types import (
     DialogFilter, Channel, Chat
 )
+from telethon.tl.functions.messages import GetDialogFiltersRequest, UpdateDialogFilterRequest
 from telethon.sessions import StringSession
 
 from config import config
@@ -378,6 +379,84 @@ async def get_dialog_folders(user_db_id: int, session_string: str) -> List[Dict]
         return []
 
 
+BOT_FOLDER_TITLE = "Bot uchun"
+
+
+async def _resolve_groups_from_peers(client, peers) -> List[Dict]:
+    """InputPeer ro'yxatini (jild.include_peers) haqiqiy guruh ma'lumotlariga aylantiradi."""
+    groups = []
+    count = 0
+    for peer in peers:
+        try:
+            entity = await client.get_entity(peer)
+            is_group = isinstance(entity, Chat) or (isinstance(entity, Channel) and entity.megagroup)
+            if is_group:
+                groups.append({
+                    "id": entity.id,
+                    "title": entity.title,
+                    "username": getattr(entity, "username", None),
+                })
+        except Exception as e:
+            logger.warning(f"Peer'ni aniqlashda xato: {e}")
+        count += 1
+        if count % 12 == 0:
+            await asyncio.sleep(random.uniform(0.4, 0.9))
+    return groups
+
+
+async def get_or_create_bot_folder(user_db_id: int, session_string: str) -> tuple:
+    """
+    "Bot uchun" nomli Telegram jildini topadi — topilmasa, BO'SH holda
+    o'zi yaratadi (guruhlarni AVTOMATIK qo'shmaydi — foydalanuvchi kerakli
+    guruhlarni Telegram ilovasida o'zi, qo'lda shu jildga qo'shadi).
+
+    Jild allaqachon mavjud bo'lsa, undagi (foydalanuvchi o'zi qo'shib
+    qo'ygan) guruhlar ro'yxati o'qib qaytariladi.
+
+    Qaytaradi: (groups: List[Dict], created: bool)
+    - created=True  → jild ENDI yaratildi (bo'sh, hali guruh yo'q)
+    - created=False → jild allaqachon bor edi, undagi guruhlar qaytarildi
+    """
+    client = await get_client(user_db_id, session_string)
+    if not client:
+        return [], False
+
+    try:
+        result = await client(GetDialogFiltersRequest())
+        existing_filters = [f for f in result.filters if hasattr(f, 'title')]
+
+        bot_filter = next((f for f in existing_filters if f.title == BOT_FOLDER_TITLE), None)
+
+        if bot_filter:
+            groups = await _resolve_groups_from_peers(client, bot_filter.include_peers)
+            return groups, False
+
+        # Jild topilmadi — BO'SH holda yaratamiz. Guruhlarni AVTOMATIK
+        # qo'shmaymiz — bu foydalanuvchining o'zi bajaradigan qadam.
+        used_ids = {f.id for f in existing_filters}
+        new_id = 2
+        while new_id in used_ids:
+            new_id += 1
+
+        new_filter = DialogFilter(
+            id=new_id,
+            title=BOT_FOLDER_TITLE,
+            pinned_peers=[],
+            include_peers=[],
+            exclude_peers=[],
+        )
+        await client(UpdateDialogFilterRequest(id=new_id, filter=new_filter))
+        logger.info(f"'{BOT_FOLDER_TITLE}' bo'sh jildi yaratildi: user {user_db_id}")
+
+        return [], True
+
+    except (SessionRevokedException, AccountBannedException):
+        raise
+    except Exception as e:
+        logger.error(f"get_or_create_bot_folder xatosi (user {user_db_id}): {e}")
+        return [], False
+
+
 async def get_groups_from_folder(user_db_id: int, session_string: str, folder_filter) -> List[Dict]:
     """Extract groups from a dialog filter folder."""
     client = await get_client(user_db_id, session_string)
@@ -615,12 +694,3 @@ async def session_health_checker(bot):
                 await asyncio.sleep(random.uniform(2, 5))
         except Exception as e:
             logger.error(f"session_health_checker umumiy xatosi: {e}", exc_info=True)
-
-
-# Import needed for get_dialog_folders
-try:
-    from telethon.tl.functions.messages import GetDialogFiltersRequest
-except ImportError:
-    # Fallback for older versions
-    class GetDialogFiltersRequest:
-        pass

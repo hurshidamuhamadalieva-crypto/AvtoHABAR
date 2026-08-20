@@ -77,7 +77,7 @@ def kb_interval() -> InlineKeyboardMarkup:
     for mins in config.BROADCAST_INTERVALS:
         builder.button(text=f"⏱ {mins} daqiqa", callback_data=f"bc_interval:{mins}")
     builder.button(text="❌ Bekor qilish", callback_data="bc_cancel")
-    builder.adjust(2, 2, 1)
+    builder.adjust(2, 2, 1, 1)
     return builder.as_markup()
 
 
@@ -140,7 +140,6 @@ def kb_folders(folders: list) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for i, folder in enumerate(folders):
         builder.button(text=f"📁 {folder['title']}", callback_data=f"folder:{i}")
-    builder.button(text="🗑 Guruhlarni tozalash", callback_data="folder:clear")
     builder.button(text="🔙 Orqaga", callback_data="folder:back")
     builder.adjust(1)
     return builder.as_markup()
@@ -148,7 +147,8 @@ def kb_folders(folders: list) -> InlineKeyboardMarkup:
 
 def kb_groups_menu() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="📁 Jild tanlash", callback_data="groups:choose_folder")
+    builder.button(text="🆕 'Bot uchun' jild yaratish/yangilash", callback_data="groups:bot_folder")
+    builder.button(text="📁 Boshqa (o'zim tayyorlagan) jildni tanlash", callback_data="groups:choose_folder")
     builder.button(text="🗑 Guruhlarni tozalash", callback_data="groups:clear")
     builder.button(text="🔙 Orqaga", callback_data="groups:back")
     builder.adjust(1)

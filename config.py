@@ -46,7 +46,7 @@ class Config:
     SESSION_HEALTH_CHECK_MINUTES: int = int(os.getenv("SESSION_HEALTH_CHECK_MINUTES", "15"))
 
     # Yuborish intervali variantlari (daqiqada) — E'lon yuborish bo'limida ko'rsatiladi
-    BROADCAST_INTERVALS = [7, 10, 15, 20]
+    BROADCAST_INTERVALS = [5, 7, 10, 15, 20]
 
     PLANS = {
         "1month":  {"name": "🥉 1 Oy",   "price": 50000,  "days": 30,  "label": "🥉 1 Oy — 50,000 so'm"},
