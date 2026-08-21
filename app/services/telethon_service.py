@@ -399,8 +399,8 @@ async def _resolve_groups_from_peers(client, peers) -> List[Dict]:
         except Exception as e:
             logger.warning(f"Peer'ni aniqlashda xato: {e}")
         count += 1
-        if count % 12 == 0:
-            await asyncio.sleep(random.uniform(0.4, 0.9))
+        if count % 20 == 0:
+            await asyncio.sleep(random.uniform(0.25, 0.5))
     return groups
 
 
@@ -446,7 +446,19 @@ async def get_or_create_bot_folder(user_db_id: int, session_string: str) -> tupl
             exclude_peers=[],
         )
         await client(UpdateDialogFilterRequest(id=new_id, filter=new_filter))
-        logger.info(f"'{BOT_FOLDER_TITLE}' bo'sh jildi yaratildi: user {user_db_id}")
+
+        # Yaratilgani HAQIQATDA amalga oshganini tasdiqlash uchun qayta
+        # so'raymiz (ba'zida server javobi kechikishi yoki mijoz keshi
+        # eskirgan bo'lishi mumkin — shu sabab avval "topildi" deb noto'g'ri
+        # xabar berilib qolgan holatlar bo'lgan edi).
+        verify = await client(GetDialogFiltersRequest())
+        confirmed = any(
+            hasattr(f, 'title') and f.title == BOT_FOLDER_TITLE for f in verify.filters
+        )
+        if not confirmed:
+            logger.error(f"'{BOT_FOLDER_TITLE}' jildi yaratildi, lekin tasdiqlanmadi (user {user_db_id})")
+
+        logger.info(f"'{BOT_FOLDER_TITLE}' bo'sh jildi yaratildi: user {user_db_id}, tasdiqlandi={confirmed}")
 
         return [], True
 
@@ -455,6 +467,117 @@ async def get_or_create_bot_folder(user_db_id: int, session_string: str) -> tupl
     except Exception as e:
         logger.error(f"get_or_create_bot_folder xatosi (user {user_db_id}): {e}")
         return [], False
+
+
+async def list_all_groups_with_selection(user_db_id: int, session_string: str) -> tuple:
+    """
+    Foydalanuvchining BARCHA guruhlarini, shu bilan birga ulardan qaysilari
+    hozir "Bot uchun" jildida borligini (tanlangan holatini) birga qaytaradi.
+    Bot ichidagi tugma orqali guruh tanlash ekranini chizish uchun ishlatiladi.
+
+    Qaytaradi: (all_groups: List[Dict], selected_ids: set)
+    """
+    client = await get_client(user_db_id, session_string)
+    if not client:
+        return [], set()
+
+    try:
+        result = await client(GetDialogFiltersRequest())
+        existing_filters = [f for f in result.filters if hasattr(f, 'title')]
+        bot_filter = next((f for f in existing_filters if f.title == BOT_FOLDER_TITLE), None)
+
+        selected_ids = set()
+        if bot_filter:
+            for p in bot_filter.include_peers:
+                pid = getattr(p, 'channel_id', None) or getattr(p, 'chat_id', None)
+                if pid is not None:
+                    selected_ids.add(pid)
+
+        groups = []
+        count = 0
+        async for dialog in client.iter_dialogs():
+            entity = dialog.entity
+            is_group = isinstance(entity, Chat) or (isinstance(entity, Channel) and entity.megagroup)
+            if is_group:
+                groups.append({
+                    "id": entity.id,
+                    "title": entity.title,
+                    "username": getattr(entity, "username", None),
+                })
+            count += 1
+            if count % 20 == 0:
+                await asyncio.sleep(random.uniform(0.25, 0.5))
+
+        return groups, selected_ids
+
+    except (SessionRevokedException, AccountBannedException):
+        raise
+    except Exception as e:
+        logger.error(f"list_all_groups_with_selection xatosi (user {user_db_id}): {e}")
+        return [], set()
+
+
+async def toggle_group_in_bot_folder(
+    user_db_id: int, session_string: str, group_id: int, add: bool
+) -> bool:
+    """
+    "Bot uchun" jildiga bitta guruhni qo'shadi (add=True) yoki undan
+    chiqaradi (add=False). Jild mavjud bo'lmasa, avval bo'sh holda
+    yaratib olinadi.
+    """
+    client = await get_client(user_db_id, session_string)
+    if not client:
+        return False
+
+    try:
+        result = await client(GetDialogFiltersRequest())
+        existing_filters = [f for f in result.filters if hasattr(f, 'title')]
+        bot_filter = next((f for f in existing_filters if f.title == BOT_FOLDER_TITLE), None)
+
+        if not bot_filter:
+            used_ids = {f.id for f in existing_filters}
+            new_id = 2
+            while new_id in used_ids:
+                new_id += 1
+            bot_filter = DialogFilter(
+                id=new_id, title=BOT_FOLDER_TITLE,
+                pinned_peers=[], include_peers=[], exclude_peers=[],
+            )
+
+        entity = await client.get_entity(group_id)
+        peer = await client.get_input_entity(entity)
+        target_id = abs(group_id)
+
+        new_include = []
+        already_present = False
+        for p in bot_filter.include_peers:
+            pid = abs(getattr(p, 'channel_id', None) or getattr(p, 'chat_id', None) or 0)
+            if pid == target_id:
+                already_present = True
+                if add:
+                    new_include.append(p)  # allaqachon bor, qoldiramiz
+                # add=False bo'lsa — bu peer'ni ro'yxatga qo'shmaymiz (o'chirilgan bo'ladi)
+            else:
+                new_include.append(p)
+
+        if add and not already_present:
+            new_include.append(peer)
+
+        updated_filter = DialogFilter(
+            id=bot_filter.id,
+            title=BOT_FOLDER_TITLE,
+            pinned_peers=list(bot_filter.pinned_peers),
+            include_peers=new_include,
+            exclude_peers=list(bot_filter.exclude_peers),
+        )
+        await client(UpdateDialogFilterRequest(id=bot_filter.id, filter=updated_filter))
+        return True
+
+    except (SessionRevokedException, AccountBannedException):
+        raise
+    except Exception as e:
+        logger.error(f"toggle_group_in_bot_folder xatosi (user {user_db_id}, group {group_id}): {e}")
+        return False
 
 
 async def get_groups_from_folder(user_db_id: int, session_string: str, folder_filter) -> List[Dict]:
@@ -489,8 +612,8 @@ async def get_groups_from_folder(user_db_id: int, session_string: str, folder_fi
                     })
 
             count += 1
-            if count % 12 == 0:
-                await asyncio.sleep(random.uniform(0.4, 0.9))
+            if count % 20 == 0:
+                await asyncio.sleep(random.uniform(0.25, 0.5))
 
         # Filter by folder if folder_filter has include_peers
         if folder_filter and hasattr(folder_filter, 'include_peers') and folder_filter.include_peers:
@@ -537,8 +660,8 @@ async def get_all_groups(user_db_id: int, session_string: str) -> List[Dict]:
                 })
 
             count += 1
-            if count % 12 == 0:
-                await asyncio.sleep(random.uniform(0.4, 0.9))
+            if count % 20 == 0:
+                await asyncio.sleep(random.uniform(0.25, 0.5))
 
     except (SessionRevokedException, AccountBannedException):
         raise

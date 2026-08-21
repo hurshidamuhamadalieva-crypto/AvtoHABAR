@@ -6,7 +6,10 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 
 from app.database import get_or_create_user, get_user_groups, save_groups
-from app.keyboards import kb_main_menu, kb_back_inline, kb_groups_menu, kb_confirm_clear_groups, kb_folders
+from app.keyboards import (
+    kb_main_menu, kb_back_inline, kb_groups_menu, kb_confirm_clear_groups,
+    kb_folders, kb_bot_folder_actions, kb_group_picker,
+)
 from app.states import GroupFlow
 from app.services import telethon_service
 from app.services.telethon_service import BOT_FOLDER_TITLE
@@ -16,6 +19,12 @@ router = Router()
 logger = logging.getLogger(__name__)
 
 _user_folders = {}  # temp cache: user_tg_id -> [folder dicts]
+
+GROUPS_PER_PAGE = 10
+
+# guruh-tanlash ekrani uchun vaqtinchalik keshlar (foydalanuvchi Telegram ID bo'yicha)
+_picker_all_groups = {}   # user_tg_id -> [group dicts]
+_picker_selected_ids = {}  # user_tg_id -> set(abs(group_id))
 
 
 def _check_active(user) -> bool:
@@ -87,6 +96,11 @@ async def cb_open_groups_menu(call: CallbackQuery, state: FSMContext):
 async def cb_bot_folder(call: CallbackQuery, state: FSMContext):
     user = await get_or_create_user(call.from_user.id)
 
+    # Guruh-tanlash ekranidan eski (boshqa jild uchun) kesh qolib
+    # ketmasligi uchun tozalab qo'yamiz.
+    _picker_all_groups.pop(call.from_user.id, None)
+    _picker_selected_ids.pop(call.from_user.id, None)
+
     remaining = _warmup_remaining_seconds(user)
     if remaining > 0:
         minutes = remaining // 60 + (1 if remaining % 60 else 0)
@@ -117,12 +131,11 @@ async def cb_bot_folder(call: CallbackQuery, state: FSMContext):
             )
             await loading.edit_text(
                 note +
-                "📲 Endi Telegram ilovangizni oching va kerakli guruh(lar)ni "
-                "<b>'Bot uchun'</b> jildiga qo'lda qo'shib chiqing.\n\n"
-                "Qo'shib bo'lgach, shu tugmani qayta bosing — bot ulardan "
-                "xabar yuborishni boshlaydi.",
+                "📲 Endi kerakli guruh(lar)ni <b>hohlasangiz qo'lda</b> "
+                "(Telegram ilovangizda 'Bot uchun' jildiga qo'shib), "
+                "<b>hohlasangiz pastdagi tugma orqali</b> qo'shib chiqing:",
                 parse_mode="HTML",
-                reply_markup=kb_back_inline("groups:back")
+                reply_markup=kb_bot_folder_actions()
             )
             await call.answer()
             return
@@ -138,10 +151,10 @@ async def cb_bot_folder(call: CallbackQuery, state: FSMContext):
             f"👥 Guruhlar: <b>{len(groups)}</b>\n\n"
             f"<b>Guruhlar:</b>\n{group_list}\n\n"
             "💡 <i>Yangi guruh qo'shmoqchi bo'lsangiz, uni Telegram "
-            "ilovangizda 'Bot uchun' jildiga qo'shib, shu tugmani qayta "
-            "bosing.</i>",
+            "ilovangizda 'Bot uchun' jildiga qo'shing yoki pastdagi tugma "
+            "orqali qo'shing, so'ng shu tugmani qayta bosing.</i>",
             parse_mode="HTML",
-            reply_markup=kb_back_inline("groups:back")
+            reply_markup=kb_bot_folder_actions()
         )
 
     except (telethon_service.SessionRevokedException, telethon_service.AccountBannedException) as e:
@@ -167,6 +180,184 @@ async def cb_bot_folder(call: CallbackQuery, state: FSMContext):
             parse_mode="HTML",
             reply_markup=kb_back_inline("groups:back")
         )
+    await call.answer()
+
+
+# ─── Guruhlarni bot ichida, tugma orqali tanlash (sahifalab) ──────────────────
+
+async def _render_picker_page(target_message, user_tg_id: int, page: int, edit: bool = True):
+    all_groups = _picker_all_groups.get(user_tg_id, [])
+    selected_ids = _picker_selected_ids.get(user_tg_id, set())
+
+    total_pages = max(1, (len(all_groups) + GROUPS_PER_PAGE - 1) // GROUPS_PER_PAGE)
+    page = max(0, min(page, total_pages - 1))
+
+    start = page * GROUPS_PER_PAGE
+    page_groups = all_groups[start:start + GROUPS_PER_PAGE]
+
+    text = (
+        f"➕ <b>Guruhlarni tanlang</b>\n\n"
+        f"Bosilgan guruh ✅ (tanlangan) bo'lib qoladi, qayta bossangiz "
+        f"➕ (olib tashlangan) holatga qaytadi.\n\n"
+        f"📄 Sahifa: <b>{page + 1}/{total_pages}</b> · Jami guruhlar: <b>{len(all_groups)}</b> · "
+        f"Tanlangan: <b>{len(selected_ids)}</b>"
+    )
+    markup = kb_group_picker(page_groups, selected_ids, page, total_pages)
+
+    if edit:
+        try:
+            await target_message.edit_text(text, parse_mode="HTML", reply_markup=markup)
+            return
+        except Exception:
+            pass
+    await target_message.answer(text, parse_mode="HTML", reply_markup=markup)
+
+
+@router.callback_query(F.data.startswith("gp_open:"))
+async def cb_group_picker_open(call: CallbackQuery, state: FSMContext):
+    user = await get_or_create_user(call.from_user.id)
+    page = int(call.data.split(":")[1])
+
+    remaining = _warmup_remaining_seconds(user)
+    if remaining > 0:
+        minutes = remaining // 60 + (1 if remaining % 60 else 0)
+        await call.message.edit_text(
+            "⏳ <b>Hisobingiz hali \"isinib\" ulgurmadi</b>\n\n"
+            f"⏱ Taxminan <b>{minutes} daqiqadan</b> so'ng qayta urinib ko'ring.",
+            parse_mode="HTML",
+            reply_markup=kb_back_inline("menu:home")
+        )
+        await call.answer()
+        return
+
+    # Ro'yxat allaqachon keshda bo'lsa (sahifalar orasida o'tish), qayta
+    # so'ramaymiz — bu tez ishlashi uchun. Faqat birinchi ochilishda
+    # Telegram'dan so'raymiz.
+    if call.from_user.id not in _picker_all_groups:
+        loading = await call.message.edit_text("⏳ <b>Guruhlar yuklanmoqda...</b>", parse_mode="HTML")
+        try:
+            all_groups, selected_ids = await telethon_service.list_all_groups_with_selection(
+                user.id, user.session_string
+            )
+        except (telethon_service.SessionRevokedException, telethon_service.AccountBannedException) as e:
+            banned = isinstance(e, telethon_service.AccountBannedException)
+            await telethon_service.handle_lost_session(call.bot, user.id, call.from_user.id, banned=banned)
+            await loading.edit_text(
+                "🚫 <b>Akkauntingiz bloklangan.</b>\n\nBoshqa raqam bilan urinib ko'ring."
+                if banned else
+                "⚠️ <b>Hisobingiz uzilib qoldi!</b>\n\nIltimos, qayta ulang.",
+                parse_mode="HTML",
+                reply_markup=kb_back_inline("menu:home")
+            )
+            await call.answer()
+            return
+        except Exception as e:
+            logger.error(f"Guruhlarni yuklashda xato {call.from_user.id}: {e}")
+            await loading.edit_text(
+                f"❌ <b>Xato:</b> <code>{str(e)[:200]}</code>",
+                parse_mode="HTML",
+                reply_markup=kb_back_inline("groups:bot_folder")
+            )
+            await call.answer()
+            return
+
+        if not all_groups:
+            await loading.edit_text(
+                "❌ <b>Hisobingizda guruh topilmadi.</b>",
+                parse_mode="HTML",
+                reply_markup=kb_back_inline("groups:bot_folder")
+            )
+            await call.answer()
+            return
+
+        _picker_all_groups[call.from_user.id] = all_groups
+        _picker_selected_ids[call.from_user.id] = selected_ids
+
+    await _render_picker_page(call.message, call.from_user.id, page, edit=True)
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("gp:"))
+async def cb_group_picker_toggle(call: CallbackQuery, state: FSMContext):
+    user = await get_or_create_user(call.from_user.id)
+    _, page_str, group_id_str = call.data.split(":")
+    page = int(page_str)
+    group_id = int(group_id_str)
+
+    selected_ids = _picker_selected_ids.setdefault(call.from_user.id, set())
+    target_id = abs(group_id)
+    is_currently_selected = target_id in selected_ids
+
+    add = not is_currently_selected
+
+    try:
+        ok = await telethon_service.toggle_group_in_bot_folder(user.id, user.session_string, group_id, add=add)
+    except (telethon_service.SessionRevokedException, telethon_service.AccountBannedException) as e:
+        banned = isinstance(e, telethon_service.AccountBannedException)
+        await telethon_service.handle_lost_session(call.bot, user.id, call.from_user.id, banned=banned)
+        await call.message.edit_text(
+            "🚫 <b>Akkauntingiz bloklangan.</b>" if banned else
+            "⚠️ <b>Hisobingiz uzilib qoldi! Iltimos, qayta ulang.</b>",
+            parse_mode="HTML",
+            reply_markup=kb_back_inline("menu:home")
+        )
+        await call.answer()
+        return
+    except Exception as e:
+        logger.error(f"Guruh toggle xatosi: {e}")
+        await call.answer("❌ Xato yuz berdi, qayta urinib ko'ring.", show_alert=True)
+        return
+
+    if not ok:
+        await call.answer("❌ Xato yuz berdi, qayta urinib ko'ring.", show_alert=True)
+        return
+
+    if add:
+        selected_ids.add(target_id)
+        await call.answer("✅ Guruh qo'shildi!")
+    else:
+        selected_ids.discard(target_id)
+        await call.answer("➖ Guruh olib tashlandi.")
+
+    await _render_picker_page(call.message, call.from_user.id, page, edit=True)
+
+
+@router.callback_query(F.data == "gp_done")
+async def cb_group_picker_done(call: CallbackQuery, state: FSMContext):
+    user = await get_or_create_user(call.from_user.id)
+    all_groups = _picker_all_groups.get(call.from_user.id, [])
+    selected_ids = _picker_selected_ids.get(call.from_user.id, set())
+
+    final_groups = [g for g in all_groups if abs(g["id"]) in selected_ids]
+
+    if final_groups:
+        await save_groups(user.id, final_groups, BOT_FOLDER_TITLE)
+
+    _picker_all_groups.pop(call.from_user.id, None)
+    _picker_selected_ids.pop(call.from_user.id, None)
+
+    group_list = "\n".join(f"  • {g['title']}" for g in final_groups[:10])
+    if len(final_groups) > 10:
+        group_list += f"\n  ... va yana {len(final_groups) - 10} ta"
+
+    await call.message.edit_text(
+        f"✅ <b>Tayyor!</b>\n\n"
+        f"👥 Tanlangan guruhlar: <b>{len(final_groups)}</b>\n\n"
+        f"<b>Guruhlar:</b>\n{group_list if final_groups else '  <i>hech qaysi tanlanmadi</i>'}",
+        parse_mode="HTML",
+        reply_markup=kb_back_inline("groups:back")
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data == "gp_back")
+async def cb_group_picker_back(call: CallbackQuery, state: FSMContext):
+    _picker_all_groups.pop(call.from_user.id, None)
+    _picker_selected_ids.pop(call.from_user.id, None)
+    await call.message.edit_text(
+        "📂 Guruhlar boshqaruvi:",
+        reply_markup=kb_groups_menu()
+    )
     await call.answer()
 
 

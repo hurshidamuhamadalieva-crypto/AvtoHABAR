@@ -155,6 +155,49 @@ def kb_groups_menu() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def kb_bot_folder_actions() -> InlineKeyboardMarkup:
+    """'Bot uchun' jildi ekranida ko'rsatiladigan tugmalar."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="➕ Guruhlarni qo'shish", callback_data="gp_open:0")
+    builder.button(text="🔙 Orqaga", callback_data="groups:back")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def kb_group_picker(groups_page: list, selected_ids: set, page: int, total_pages: int) -> InlineKeyboardMarkup:
+    """
+    Guruhlarni sahifalab (10 tadan), tugma bosib tanlash/bekor qilish
+    uchun klaviatura. Tanlangan guruh ✅, tanlanmagan ➕ belgisi bilan
+    ko'rsatiladi.
+    """
+    builder = InlineKeyboardBuilder()
+    for g in groups_page:
+        is_selected = abs(g["id"]) in selected_ids
+        mark = "✅" if is_selected else "➕"
+        title = g["title"] if len(g["title"]) <= 32 else g["title"][:29] + "..."
+        builder.button(text=f"{mark} {title}", callback_data=f"gp:{page}:{g['id']}")
+
+    nav_count = 0
+    if page > 0:
+        builder.button(text="◀️ Oldingi", callback_data=f"gp_open:{page - 1}")
+        nav_count += 1
+    if page < total_pages - 1:
+        builder.button(text="Keyingisi ▶️", callback_data=f"gp_open:{page + 1}")
+        nav_count += 1
+
+    builder.button(text="✅ Tayyor", callback_data="gp_done")
+    builder.button(text="🔙 Orqaga", callback_data="gp_back")
+
+    rows = [1] * len(groups_page)
+    if nav_count:
+        rows.append(nav_count)
+    rows.append(1)  # Tayyor
+    rows.append(1)  # Orqaga
+    builder.adjust(*rows)
+
+    return builder.as_markup()
+
+
 def kb_confirm_clear_groups() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Ha, o'chirish", callback_data="groups:confirm_clear")
