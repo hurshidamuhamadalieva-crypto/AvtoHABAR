@@ -50,7 +50,7 @@ class Config:
 
     PLANS = {
         "1month":  {"name": "🥉 1 Oy",   "price": 50000,  "days": 30,  "label": "🥉 1 Oy — 50,000 so'm"},
-        "3months": {"name": "🥈 3 Oy",   "price": 200000, "days": 90,  "label": "🥈 3 Oy — 200,000 so'm"},
+        "3months": {"name": "🥈 3 Oy",   "price": 150000, "days": 90,  "label": "🥈 3 Oy — 150,000 so'm"},
         "5months": {"name": "🥇 5 Oy",   "price": 400000, "days": 150, "label": "🥇 5 Oy — 400,000 so'm"},
     }
 

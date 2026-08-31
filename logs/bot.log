@@ -1,0 +1,47 @@
+2026-08-31 19:35:21 | INFO     | __main__ | 🚀 AutoAd Bot ishga tushmoqda...
+2026-08-31 19:35:21 | INFO     | app.database | Database initialized successfully.
+2026-08-31 19:35:21 | INFO     | __main__ | ✅ Ma'lumotlar bazasi tayyor.
+2026-08-31 19:35:21 | INFO     | __main__ | ✅ Fon vazifalar ishga tushdi.
+2026-08-31 19:35:21 | INFO     | __main__ | ✅ Bot ishlamoqda. To'xtatish uchun Ctrl+C bosing.
+2026-08-31 19:35:21 | INFO     | aiogram.dispatcher | Start polling
+2026-08-31 19:35:22 | INFO     | aiogram.dispatcher | Run polling for bot @habarchi_super_bot id=8866470342 - 'HABARCHI BOT SUPER'
+2026-08-31 19:35:22 | INFO     | aiogram.event | Update id=158451588 is handled. Duration 391 ms by bot id=8866470342
+2026-08-31 19:35:24 | INFO     | aiogram.event | Update id=158451589 is handled. Duration 343 ms by bot id=8866470342
+2026-08-31 19:35:26 | ERROR    | app.handlers.payment | Admin 7573028323 ga xabar yuborishda xato: Telegram server says - Bad Request: chat not found
+2026-08-31 19:35:26 | INFO     | aiogram.event | Update id=158451590 is handled. Duration 687 ms by bot id=8866470342
+2026-08-31 19:35:28 | INFO     | aiogram.event | Update id=158451591 is handled. Duration 592 ms by bot id=8866470342
+2026-08-31 19:35:30 | INFO     | aiogram.event | Update id=158451592 is handled. Duration 438 ms by bot id=8866470342
+2026-08-31 19:35:31 | INFO     | aiogram.event | Update id=158451593 is handled. Duration 437 ms by bot id=8866470342
+2026-08-31 19:35:33 | WARNING  | app.services.telethon_service | Proksi bilan ulanib bo'lmadi (('socks5', '31.59.20.176', 6754, True, 'mmigcqmd', 'xqsl5wqqf07c')): No module named 'socks'. Keyingisiga o'tilmoqda...
+2026-08-31 19:35:33 | WARNING  | app.services.telethon_service | Proksi bilan ulanib bo'lmadi (('socks5', '45.38.107.97', 6014, True, 'mmigcqmd', 'xqsl5wqqf07c')): No module named 'socks'. Keyingisiga o'tilmoqda...
+2026-08-31 19:35:33 | WARNING  | app.services.telethon_service | Proksi bilan ulanib bo'lmadi (('socks5', '198.105.121.200', 6462, True, 'mmigcqmd', 'xqsl5wqqf07c')): No module named 'socks'. Keyingisiga o'tilmoqda...
+2026-08-31 19:35:33 | WARNING  | app.services.telethon_service | Proksi bilan ulanib bo'lmadi (('socks5', '64.137.96.74', 6641, True, 'mmigcqmd', 'xqsl5wqqf07c')): No module named 'socks'. Keyingisiga o'tilmoqda...
+2026-08-31 19:35:33 | WARNING  | app.services.telethon_service | Proksi bilan ulanib bo'lmadi (('socks5', '198.23.243.226', 6361, True, 'mmigcqmd', 'xqsl5wqqf07c')): No module named 'socks'. Keyingisiga o'tilmoqda...
+2026-08-31 19:35:33 | WARNING  | app.services.telethon_service | Proksi bilan ulanib bo'lmadi (('socks5', '38.154.185.97', 6370, True, 'mmigcqmd', 'xqsl5wqqf07c')): No module named 'socks'. Keyingisiga o'tilmoqda...
+2026-08-31 19:35:33 | WARNING  | app.services.telethon_service | Proksi bilan ulanib bo'lmadi (('socks5', '84.247.60.125', 6095, True, 'mmigcqmd', 'xqsl5wqqf07c')): No module named 'socks'. Keyingisiga o'tilmoqda...
+2026-08-31 19:35:33 | WARNING  | app.services.telethon_service | Proksi bilan ulanib bo'lmadi (('socks5', '142.111.67.146', 5611, True, 'mmigcqmd', 'xqsl5wqqf07c')): No module named 'socks'. Keyingisiga o'tilmoqda...
+2026-08-31 19:35:33 | WARNING  | app.services.telethon_service | Proksi bilan ulanib bo'lmadi (('socks5', '191.96.254.138', 6185, True, 'mmigcqmd', 'xqsl5wqqf07c')): No module named 'socks'. Keyingisiga o'tilmoqda...
+2026-08-31 19:35:33 | WARNING  | app.services.telethon_service | Proksi bilan ulanib bo'lmadi (('socks5', '31.58.9.4', 6077, True, 'mmigcqmd', 'xqsl5wqqf07c')): No module named 'socks'. Keyingisiga o'tilmoqda...
+2026-08-31 19:35:33 | ERROR    | app.handlers.phone | Kod yuborishda xato +998907829211: No module named 'socks'
+2026-08-31 19:35:33 | INFO     | aiogram.event | Update id=158451594 is handled. Duration 344 ms by bot id=8866470342
+2026-08-31 19:35:54 | INFO     | aiogram.dispatcher | Polling stopped for bot @habarchi_super_bot id=8866470342 - 'HABARCHI BOT SUPER'
+2026-08-31 19:35:54 | INFO     | aiogram.dispatcher | Polling stopped
+2026-08-31 19:35:55 | INFO     | __main__ | 🛑 Bot to'xtatildi.
+2026-08-31 19:35:55 | INFO     | __main__ | Foydalanuvchi tomonidan to'xtatildi.
+2026-08-31 19:37:03 | INFO     | __main__ | 🚀 AutoAd Bot ishga tushmoqda...
+2026-08-31 19:37:03 | INFO     | app.database | Database initialized successfully.
+2026-08-31 19:37:03 | INFO     | __main__ | ✅ Ma'lumotlar bazasi tayyor.
+2026-08-31 19:37:03 | INFO     | __main__ | ✅ Fon vazifalar ishga tushdi.
+2026-08-31 19:37:03 | INFO     | __main__ | ✅ Bot ishlamoqda. To'xtatish uchun Ctrl+C bosing.
+2026-08-31 19:37:03 | INFO     | aiogram.dispatcher | Start polling
+2026-08-31 19:37:04 | INFO     | aiogram.dispatcher | Run polling for bot @habarchi_super_bot id=8866470342 - 'HABARCHI BOT SUPER'
+2026-08-31 19:37:08 | INFO     | aiogram.event | Update id=158451595 is handled. Duration 420 ms by bot id=8866470342
+2026-08-31 19:37:10 | INFO     | aiogram.event | Update id=158451596 is handled. Duration 422 ms by bot id=8866470342
+2026-08-31 19:37:11 | INFO     | aiogram.event | Update id=158451597 is handled. Duration 422 ms by bot id=8866470342
+2026-08-31 19:37:17 | INFO     | app.services.telethon_service | Kod so'rovi yuborildi: +998907829211 — proksi orqali (31.59.20.176:6754)
+2026-08-31 19:37:17 | INFO     | aiogram.event | Update id=158451598 is handled. Duration 3250 ms by bot id=8866470342
+2026-08-31 19:37:20 | INFO     | aiogram.event | Update id=158451599 is handled. Duration 546 ms by bot id=8866470342
+2026-08-31 19:37:40 | INFO     | aiogram.dispatcher | Polling stopped for bot @habarchi_super_bot id=8866470342 - 'HABARCHI BOT SUPER'
+2026-08-31 19:37:40 | INFO     | aiogram.dispatcher | Polling stopped
+2026-08-31 19:37:41 | INFO     | __main__ | 🛑 Bot to'xtatildi.
+2026-08-31 19:37:41 | INFO     | __main__ | Foydalanuvchi tomonidan to'xtatildi.
