@@ -50,6 +50,15 @@ async def main():
     )
     dp = Dispatcher(storage=MemoryStorage())
 
+    # MUHIM: agar bu bot tokeniga avvalroq (masalan sinov paytida, yoki
+    # boshqa joyda) webhook o'rnatilgan bo'lsa, polling (getUpdates) usuli
+    # u bilan TO'QNASHADI va bot yangilanishlarni umuman ololmay qoladi
+    # ("Conflict: can't use getUpdates method while webhook is active").
+    # Shu sabab, polling boshlashdan OLDIN webhook'ni har doim tozalab
+    # qo'yamiz — webhook aslida o'rnatilmagan bo'lsa ham, bu chaqiruv
+    # xavfsiz va hech narsani buzmaydi.
+    await bot.delete_webhook(drop_pending_updates=False)
+
     dp.message.middleware(SubscriptionMiddleware())
     dp.callback_query.middleware(BanCheckCallbackMiddleware())
 
