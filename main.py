@@ -31,6 +31,29 @@ logging.getLogger("telethon").setLevel(logging.WARNING)
 logging.getLogger("aiosqlite").setLevel(logging.WARNING)
 
 
+async def _webhook_guard(bot: Bot):
+    """
+    Fon vazifasi: agar biror sabab bilan (masalan, boshqa bir dastur yoki
+    deployment) ishlash paytida webhook qayta o'rnatib qo'yilsa, buni
+    har 60 soniyada tekshirib, avtomatik o'chirib turadi. Bez shu bo'lmasa,
+    faqat DASTUR BOSHLANISHIDA bir marta tozalanadi — agar keyin kimdir
+    yana webhook o'rnatsa, polling abadiy "Conflict" xatosi bilan
+    to'xtab qolaveradi.
+    """
+    while True:
+        await asyncio.sleep(60)
+        try:
+            info = await bot.get_webhook_info()
+            if info.url:
+                logger.warning(
+                    f"⚠️ Webhook ishlash paytida QAYTA o'rnatilgan ekan (URL: {info.url})! "
+                    f"Avtomatik o'chirilmoqda. Buning sababini albatta topib, oldini olish kerak."
+                )
+                await bot.delete_webhook(drop_pending_updates=False)
+        except Exception as e:
+            logger.warning(f"_webhook_guard tekshiruvida xato: {e}")
+
+
 async def main():
     logger.info("🚀 AutoAd Bot ishga tushmoqda...")
 
@@ -57,7 +80,29 @@ async def main():
     # Shu sabab, polling boshlashdan OLDIN webhook'ni har doim tozalab
     # qo'yamiz — webhook aslida o'rnatilmagan bo'lsa ham, bu chaqiruv
     # xavfsiz va hech narsani buzmaydi.
-    await bot.delete_webhook(drop_pending_updates=False)
+    #
+    # Bundan tashqari, MUAMMONI ANIQLASH uchun avval joriy webhook holatini
+    # LOGGA yozib qo'yamiz. Agar shu yerda haqiqiy URL ko'rinsa — demak
+    # boshqa bir joy (masalan, boshqa deployment yoki boshqa dastur) shu
+    # BOT_TOKEN'ni webhook rejimida ishlatmoqda va buni albatta to'xtatish
+    # kerak, aks holda muammo qayta-qayta takrorlanaveradi.
+    try:
+        info = await bot.get_webhook_info()
+        if info.url:
+            logger.warning(
+                f"⚠️ DIQQAT: bu botda ALLAQACHON webhook o'rnatilgan edi! "
+                f"URL: {info.url} | Kutilayotgan yangilanishlar: {info.pending_update_count}. "
+                f"Buni hozir o'chiryapmiz, lekin agar bu xabar qayta-qayta chiqsa, "
+                f"demak boshqa bir dastur/deployment shu BOT_TOKEN'ni webhook "
+                f"rejimida ishlatmoqda — uni albatta to'xtatish kerak!"
+            )
+        else:
+            logger.info("✅ Webhook o'rnatilmagan edi (hammasi joyida).")
+    except Exception as e:
+        logger.error(f"Webhook holatini tekshirishda xato: {e}")
+
+    deleted = await bot.delete_webhook(drop_pending_updates=False)
+    logger.info(f"Webhook tozalash natijasi: {deleted}")
 
     dp.message.middleware(SubscriptionMiddleware())
     dp.callback_query.middleware(BanCheckCallbackMiddleware())
@@ -73,6 +118,7 @@ async def main():
     asyncio.create_task(subscription_checker(bot))
     asyncio.create_task(cleanup_stale_logins())
     asyncio.create_task(session_health_checker(bot))
+    asyncio.create_task(_webhook_guard(bot))
     logger.info("✅ Fon vazifalar ishga tushdi.")
     logger.info("✅ Bot ishlamoqda. To'xtatish uchun Ctrl+C bosing.")
 
