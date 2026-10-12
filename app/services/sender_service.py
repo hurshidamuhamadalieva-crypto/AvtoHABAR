@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 _sending_tasks: Dict[int, asyncio.Task] = {}
 
 # Guruhlar orasidagi kutish (spam himoyasi)
-DELAY_BETWEEN_GROUPS = 8
+DELAY_BETWEEN_GROUPS = 1
 
 
 async def start_sending(bot, user_db_id: int, telegram_id: int, session_string: str):
