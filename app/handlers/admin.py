@@ -257,3 +257,24 @@ async def do_edit_sub(message: Message, state: FSMContext):
 
     except ValueError:
         await message.answer("❌ Noto'g'ri ID.")
+
+
+@router.callback_query(F.data == "admin:proxies", IsAdmin())
+async def cb_proxy_status(call: CallbackQuery):
+    from app.services.proxy_health import check_proxies
+    await call.answer("Proksilar tekshirilmoqda...")
+    status = await call.message.answer("🌐 Proksilar tekshirilmoqda. Iltimos, kuting...")
+    try:
+        result = await check_proxies()
+        await status.edit_text(
+            f"🌐 <b>Proxy holati</b>\n\n"
+            f"Jami: <b>{result['total']}</b>\n"
+            f"✅ Ishlayapti: <b>{result['working']}</b>\n"
+            f"❌ Ulanmadi: <b>{result['failed']}</b>\n\n"
+            "Telegram serveriga proksi orqali ulanish tekshirildi. "
+            "Natija 60 soniya saqlanadi. Ulanmagan proksi vaqtincha ham javob bermagan bo'lishi mumkin.",
+            reply_markup=kb_back_inline("menu:admin"))
+    except Exception:
+        logger.exception("Proxy tekshiruvida xato")
+        await status.edit_text("Proksilarni tekshirib bo'lmadi. Qayta urinib ko'ring.",
+                               reply_markup=kb_back_inline("menu:admin"))

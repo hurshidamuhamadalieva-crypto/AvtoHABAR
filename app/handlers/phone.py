@@ -126,6 +126,8 @@ async def cb_phone_disconnect(call: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "phone:confirm_disconnect")
 async def cb_confirm_disconnect(call: CallbackQuery, state: FSMContext):
     user = await get_or_create_user(call.from_user.id)
+    from app.services.sender_service import stop_all_for_user
+    await stop_all_for_user(user.id)
 
     try:
         await telethon_service.disconnect_client(user.id)
@@ -234,6 +236,10 @@ async def _process_phone(message: Message, state: FSMContext, phone: str):
     # Agar shu foydalanuvchi uchun avval ochilib, yakunlanmagan urinish bo'lsa —
     # yangisini boshlashdan oldin uni tozalaymiz (ulanishlar to'planib qolmasin).
     await _disconnect_pending(message.from_user.id)
+    user = await get_or_create_user(message.from_user.id)
+    from app.services.sender_service import stop_all_for_user
+    await stop_all_for_user(user.id)
+    await telethon_service.disconnect_client(user.id)
 
     await message.answer(
         "⏳ <b>Tasdiqlash kodi yuborilmoqda...</b>\n\n<i>Iltimos kuting...</i>",

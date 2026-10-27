@@ -11,6 +11,7 @@ Yuborishning o'zi avvalgidek — foydalanuvchi ulagan Telegram hisobi
 (session) orqali, u o'zi tanlagan guruhlarga — ishlaydi (app.services.sender_service).
 """
 import logging
+from html import escape
 
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
@@ -25,6 +26,7 @@ from app.keyboards import (
     kb_cancel_inline, kb_back_inline, kb_main_menu
 )
 from app.states import BroadcastFlow
+from config import config
 from app.services import sender_service
 from app.services.sender_service import DELAY_BETWEEN_GROUPS
 
@@ -49,8 +51,8 @@ async def _render_broadcast_home(message_target, user, edit: bool = True):
     groups = await get_user_groups(user.id)
     if not groups:
         text = (
-            "❌ <b>Guruhlar tanlanmagan!</b>\n\n"
-            "<b>📂 Guruh qo'shish</b> orqali avval guruhlarni qo'shing."
+            "❌ <b>Guruh/kanallar tanlanmagan!</b>\n\n"
+            "<b>📂 Guruh qo'shish</b> orqali avval guruh yoki kanallarni qo'shing."
         )
         markup = kb_back_inline("menu:home")
         return await _send(message_target, text, markup, edit)
@@ -64,20 +66,20 @@ async def _render_broadcast_home(message_target, user, edit: bool = True):
         text = (
             "📢 <b>E'lon Yuborish</b>\n\n"
             f"🚀 Holat: <b>Faol — yuborilmoqda</b>{' (⏸ pauzada)' if settings.sending_paused else ''}\n"
-            f"👥 Guruhlar: <b>{len(groups)} ta</b>\n"
+            f"👥 Guruh/kanallar: <b>{len(groups)} ta</b>\n"
             f"⏱ Interval: <b>{settings.interval_minutes} daqiqa</b>\n"
             f"📊 Jami yuborilgan: <b>{settings.messages_sent} ta</b>\n\n"
-            f"📄 <b>Joriy e'lon:</b>\n<i>{preview}</i>"
+            f"📄 <b>Joriy e'lon:</b>\n<i>{escape(preview)}</i>"
         )
         markup = kb_broadcast_sending(is_paused=settings.sending_paused)
     else:
         preview = (
-            f"\n\n📄 <b>Oxirgi e'lon:</b>\n<i>{ad.text[:200]}{'...' if len(ad.text) > 200 else ''}</i>"
+            f"\n\n📄 <b>Oxirgi e'lon:</b>\n<i>{escape(ad.text[:200])}{'...' if len(ad.text) > 200 else ''}</i>"
             if ad else "\n\n📭 <i>Hali e'lon yuborilmagan.</i>"
         )
         text = (
             "📢 <b>E'lon Yuborish</b>\n\n"
-            f"👥 Guruhlar: <b>{len(groups)} ta</b> tayyor\n"
+            f"👥 Guruh/kanallar: <b>{len(groups)} ta</b> tayyor\n"
             f"⏱ Interval: <b>{settings.interval_minutes} daqiqa</b>"
             + preview
         )
@@ -121,6 +123,7 @@ async def _prompt_ad_text(call: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "bc_new")
 async def cb_bc_new(call: CallbackQuery, state: FSMContext):
+    await state.clear()
     await _prompt_ad_text(call, state)
 
 
@@ -129,13 +132,15 @@ async def cb_bc_continue(call: CallbackQuery, state: FSMContext):
     user = await get_or_create_user(call.from_user.id)
     ad = await get_active_advertisement(user.id)
     if not ad:
+        await state.clear()
         await _prompt_ad_text(call, state)
         return
-    await state.update_data(ad_text=ad.text)
+    await state.clear()
+    await state.update_data(ad_text=ad.text, text_html=ad.text_html, photo_file_id=ad.photo_file_id)
     await state.set_state(BroadcastFlow.choosing_interval)
     await call.message.edit_text(
         f"♻️ Oxirgi e'loningiz asosida davom etyapmiz (matn qayta so'ralmaydi).\n\n"
-        f"✍️ Matn: <i>{ad.text[:200]}{'...' if len(ad.text) > 200 else ''}</i>\n\n"
+        f"✍️ Matn: <i>{escape(ad.text[:200])}{'...' if len(ad.text) > 200 else ''}</i>\n\n"
         "⏱ E'lon necha daqiqada bir marta yuborilsin?",
         parse_mode="HTML",
         reply_markup=kb_interval()
@@ -145,10 +150,29 @@ async def cb_bc_continue(call: CallbackQuery, state: FSMContext):
 
 @router.message(BroadcastFlow.waiting_text, F.text)
 async def receive_ad_text(message: Message, state: FSMContext):
-    await state.update_data(ad_text=message.text)
+    data = await state.get_data()
+    limit = 1024 if data.get("photo_file_id") else 4096
+    if len(message.text.encode("utf-16-le")) // 2 > limit:
+        await message.answer(f"Matn juda uzun. Eng ko'pi {limit} belgi kiriting.")
+        return
+    if data.get("editing"):
+        user = await get_or_create_user(message.from_user.id)
+        settings = await get_or_create_settings(user.id)
+        if not settings.sending_paused or not sender_service.is_sending(user.id):
+            await state.clear()
+            await message.answer("Tahrirlash uchun avval yuborishni pauza qiling.")
+            return
+        await save_advertisement(user.id, message.text, data.get("photo_file_id"), message.html_text)
+        await state.clear()
+        await sender_service.resume_sending(user.id)
+        await message.answer(
+            f"✅ E'lon yangilandi. Yuborish {settings.interval_minutes} daqiqalik interval bilan davom etadi.",
+            reply_markup=kb_broadcast_sending(False))
+        return
+    await state.update_data(ad_text=message.text, text_html=message.html_text)
     await state.set_state(BroadcastFlow.choosing_interval)
     await message.answer(
-        f"⏱ E'lon necha daqiqada bir marta yuborilsin?\n\n✍️ Matn: {message.text[:200]}",
+        f"⏱ E'lon necha daqiqada bir marta yuborilsin?\n\n✍️ Matn: {escape(message.text[:200])}",
         reply_markup=kb_interval()
     )
 
@@ -156,6 +180,9 @@ async def receive_ad_text(message: Message, state: FSMContext):
 @router.callback_query(BroadcastFlow.choosing_interval, F.data.startswith("bc_interval:"))
 async def cb_choose_interval(call: CallbackQuery, state: FSMContext):
     minutes = int(call.data.split(":")[1])
+    if minutes not in config.BROADCAST_INTERVALS:
+        await call.answer("Noto'g'ri interval.", show_alert=True)
+        return
     await state.update_data(interval=minutes)
     data = await state.get_data()
     await state.set_state(BroadcastFlow.confirming)
@@ -163,16 +190,18 @@ async def cb_choose_interval(call: CallbackQuery, state: FSMContext):
     text_preview = (data.get("ad_text") or "")[:300]
     summary = (
         f"📋 <b>E'lon Xulosasi</b>\n\n"
-        f"✍️ Matn: <i>{text_preview}</i>\n"
+        + ("🖼 Rasmli e'lon\n" if data.get("photo_file_id") else "📝 Matnli e'lon\n")
+        +
+        f"✍️ Matn: <i>{escape(text_preview)}</i>\n"
         f"⏱ Interval: <b>{minutes} daqiqa</b>\n\n"
-        "Tasdiqlaysizmi? Tasdiqlasangiz e'lon <b>darhol</b> barcha guruhlaringizga yuboriladi, "
+        "Tasdiqlaysizmi? Tasdiqlasangiz e'lon <b>darhol</b> barcha guruh va kanallaringizga yuboriladi, "
         f"so'ng har <b>{minutes} daqiqada</b> avtomatik qayta yuborilib turadi."
     )
     await call.message.edit_text(summary, parse_mode="HTML", reply_markup=kb_broadcast_confirm())
     await call.answer()
 
 
-@router.callback_query(F.data == "bc_confirm")
+@router.callback_query(BroadcastFlow.confirming, F.data == "bc_confirm")
 async def cb_confirm_broadcast(call: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     ad_text = data.get("ad_text")
@@ -188,15 +217,15 @@ async def cb_confirm_broadcast(call: CallbackQuery, state: FSMContext):
     if not groups:
         await state.clear()
         await call.message.edit_text(
-            "❌ <b>Guruhlar tanlanmagan!</b>\n\n"
-            "<b>📂 Guruh qo'shish</b> orqali avval guruhlarni qo'shing.",
+            "❌ <b>Guruh/kanallar tanlanmagan!</b>\n\n"
+            "<b>📂 Guruh qo'shish</b> orqali avval guruh yoki kanallarni qo'shing.",
             parse_mode="HTML",
             reply_markup=kb_back_inline("menu:home")
         )
         await call.answer()
         return
 
-    await save_advertisement(user.id, ad_text)
+    await save_advertisement(user.id, ad_text, data.get("photo_file_id"), data.get("text_html"))
     await update_settings(user.id, interval_minutes=interval)
     await state.set_state(BroadcastFlow.active)
 
@@ -207,8 +236,8 @@ async def cb_confirm_broadcast(call: CallbackQuery, state: FSMContext):
     await call.message.edit_text(
         f"🚀 <b>Yuborish boshlandi!</b>\n\n"
         f"📝 E'lon: ✅\n"
-        f"👥 Guruhlar: <b>{len(groups)} ta</b>\n"
-        f"⏱ Guruhlar orasidagi pauza: <b>{DELAY_BETWEEN_GROUPS} soniya</b>\n"
+        f"👥 Guruh/kanallar: <b>{len(groups)} ta</b>\n"
+        f"⏱ Guruh/kanallar orasidagi pauza: <b>{DELAY_BETWEEN_GROUPS} soniya</b>\n"
         f"🔄 Bir sikl taxminan: <b>~{max(1, estimated_cycle)} daqiqa</b>\n"
         f"⏳ Sikl orasidagi interval: <b>{interval} daqiqa</b>\n\n"
         "✅ Xabarlar avtomatik yuborilmoqda.",
@@ -257,3 +286,53 @@ async def cb_stop_sending(call: CallbackQuery, state: FSMContext):
         reply_markup=kb_main_menu(is_admin=user.is_admin, has_phone=bool(user.session_string))
     )
     await call.answer("⏹ To'xtatildi.")
+
+
+@router.callback_query(F.data == "bc_photo")
+async def cb_photo(call: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await state.set_state(BroadcastFlow.waiting_photo)
+    await call.message.edit_text("🖼 E'lon uchun bitta rasm yuboring. Keyin matnini so'rayman.",
+                                 reply_markup=kb_cancel_inline("bc_cancel"))
+    await call.answer()
+
+
+@router.message(BroadcastFlow.waiting_photo, F.photo)
+async def receive_ad_photo(message: Message, state: FSMContext):
+    await state.update_data(photo_file_id=message.photo[-1].file_id)
+    await state.set_state(BroadcastFlow.waiting_text)
+    await message.answer("✏️ Endi rasm ostida yuboriladigan e'lon matnini kiriting (1024 belgigacha).",
+                         reply_markup=kb_cancel_inline("bc_cancel"))
+
+
+@router.message(BroadcastFlow.waiting_photo)
+async def wrong_ad_photo(message: Message):
+    await message.answer("Iltimos, rasmni foto sifatida yuboring.")
+
+
+@router.callback_query(F.data == "bc_edit")
+async def cb_edit(call: CallbackQuery, state: FSMContext):
+    user = await get_or_create_user(call.from_user.id)
+    settings = await get_or_create_settings(user.id)
+    ad = await get_active_advertisement(user.id)
+    if not settings.sending_paused or not sender_service.is_sending(user.id) or not ad:
+        await call.answer("Avval yuborishni pauza qiling.", show_alert=True)
+        return
+    await state.clear()
+    await state.update_data(editing=True, photo_file_id=ad.photo_file_id)
+    await state.set_state(BroadcastFlow.waiting_text)
+    await call.message.edit_text(
+        "✏️ Yangi e'lon matnini yuboring. Rasmli e'londa rasm saqlanadi; yangi rasm yuborsangiz almashtiriladi. "
+        "Matnni yuborganingizda avvalgi interval bilan davom etadi.",
+        reply_markup=kb_cancel_inline("bc_cancel"))
+    await call.answer()
+
+
+@router.message(BroadcastFlow.waiting_text, F.photo)
+async def replace_edit_photo(message: Message, state: FSMContext):
+    data = await state.get_data()
+    if not data.get("editing"):
+        await message.answer("Iltimos, e'lon matnini yuboring.")
+        return
+    await state.update_data(photo_file_id=message.photo[-1].file_id)
+    await message.answer("🖼 Yangi rasm qabul qilindi. Endi e'lon matnini yuboring.")

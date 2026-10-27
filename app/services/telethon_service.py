@@ -303,7 +303,7 @@ async def send_code(phone: str) -> tuple:
         try:
             await client.connect()
         except Exception as e:
-            logger.warning(f"Proksi bilan ulanib bo'lmadi ({proxy}): {e}. Keyingisiga o'tilmoqda...")
+            logger.warning(f"Proksi bilan ulanib bo'lmadi ({proxy_key}): {e}. Keyingisiga o'tilmoqda...")
             last_error = e
             try:
                 await client.disconnect()
@@ -320,7 +320,7 @@ async def send_code(phone: str) -> tuple:
             return client, result, proxy_key, device
 
         except errors.FloodWaitError as e:
-            logger.warning(f"FloodWait {e.seconds}s — {phone} uchun kod so'rovida (proksi: {proxy})")
+            logger.warning(f"FloodWait {e.seconds}s — {phone} uchun kod so'rovida (proksi: {proxy_key})")
             try:
                 await client.disconnect()
             except Exception:
@@ -382,6 +382,30 @@ async def get_dialog_folders(user_db_id: int, session_string: str) -> List[Dict]
 BOT_FOLDER_TITLE = "Bot uchun"
 
 
+def is_send_target(entity):
+    return isinstance(entity, Chat) or (
+        isinstance(entity, Channel) and (
+            entity.megagroup or entity.creator or
+            bool(entity.admin_rights and entity.admin_rights.post_messages)
+        )
+    )
+
+
+def target_record(entity):
+    from telethon.utils import get_peer_id
+    return {
+        "id": get_peer_id(entity), "title": entity.title,
+        "username": getattr(entity, "username", None),
+        "peer_type": "channel" if isinstance(entity, Channel) else "chat",
+        "access_hash": getattr(entity, "access_hash", None),
+    }
+
+
+def target_key(value):
+    from telethon.utils import resolve_id
+    return resolve_id(int(value))[0]
+
+
 async def _resolve_groups_from_peers(client, peers) -> List[Dict]:
     """InputPeer ro'yxatini (jild.include_peers) haqiqiy guruh ma'lumotlariga aylantiradi."""
     groups = []
@@ -389,13 +413,9 @@ async def _resolve_groups_from_peers(client, peers) -> List[Dict]:
     for peer in peers:
         try:
             entity = await client.get_entity(peer)
-            is_group = isinstance(entity, Chat) or (isinstance(entity, Channel) and entity.megagroup)
+            is_group = is_send_target(entity)
             if is_group:
-                groups.append({
-                    "id": entity.id,
-                    "title": entity.title,
-                    "username": getattr(entity, "username", None),
-                })
+                groups.append(target_record(entity))
         except Exception as e:
             logger.warning(f"Peer'ni aniqlashda xato: {e}")
         count += 1
@@ -497,13 +517,9 @@ async def list_all_groups_with_selection(user_db_id: int, session_string: str) -
         count = 0
         async for dialog in client.iter_dialogs():
             entity = dialog.entity
-            is_group = isinstance(entity, Chat) or (isinstance(entity, Channel) and entity.megagroup)
+            is_group = is_send_target(entity)
             if is_group:
-                groups.append({
-                    "id": entity.id,
-                    "title": entity.title,
-                    "username": getattr(entity, "username", None),
-                })
+                groups.append(target_record(entity))
             count += 1
             if count % 20 == 0:
                 await asyncio.sleep(random.uniform(0.25, 0.5))
@@ -546,7 +562,7 @@ async def toggle_group_in_bot_folder(
 
         entity = await client.get_entity(group_id)
         peer = await client.get_input_entity(entity)
-        target_id = abs(group_id)
+        target_id = target_key(group_id)
 
         new_include = []
         already_present = False
@@ -581,58 +597,41 @@ async def toggle_group_in_bot_folder(
 
 
 async def get_groups_from_folder(user_db_id: int, session_string: str, folder_filter) -> List[Dict]:
-    """Extract groups from a dialog filter folder."""
+    """Import explicit peers and automatic group/channel folder rules."""
     client = await get_client(user_db_id, session_string)
     if not client:
-        return []
-
-    groups = []
-    try:
-        # Barcha suhbatlarni olish — MUHIM: bitta uzluksiz "portlash" tarzida
-        # emas, insonga o'xshab, bir necha suhbatdan keyin qisqa pauza bilan.
-        # Yangi sessiyada darhol yuzlab suhbatni bir zumda so'rash Telegramning
-        # firibgarlikka qarshi tizimiga "akkaunt skraping qilinyapti" signalini
-        # berib, akkauntni avtomatik chiqarib yuborishiga sabab bo'lgan edi.
-        count = 0
-        async for dialog in client.iter_dialogs():
-            entity = dialog.entity
-            if isinstance(entity, (Channel, Chat)):
-                # Check if it's a group (not a channel/broadcast)
-                is_group = False
-                if isinstance(entity, Chat):
-                    is_group = True
-                elif isinstance(entity, Channel) and entity.megagroup:
-                    is_group = True
-
-                if is_group:
-                    groups.append({
-                        "id": entity.id,
-                        "title": entity.title,
-                        "username": getattr(entity, "username", None),
-                    })
-
-            count += 1
-            if count % 20 == 0:
-                await asyncio.sleep(random.uniform(0.25, 0.5))
-
-        # Filter by folder if folder_filter has include_peers
-        if folder_filter and hasattr(folder_filter, 'include_peers') and folder_filter.include_peers:
-            folder_ids = set()
-            for peer in folder_filter.include_peers:
-                if hasattr(peer, 'channel_id'):
-                    folder_ids.add(peer.channel_id)
-                elif hasattr(peer, 'chat_id'):
-                    folder_ids.add(peer.chat_id)
-
-            if folder_ids:
-                groups = [g for g in groups if abs(g["id"]) in folder_ids]
-
-    except (SessionRevokedException, AccountBannedException):
-        raise
-    except Exception as e:
-        logger.error(f"Error getting groups for user {user_db_id}: {e}")
-
-    return groups
+        raise ConnectionError("Telegram hisobiga ulanib bo'lmadi")
+    from telethon.utils import get_peer_id
+    include = set()
+    exclude = set()
+    if folder_filter:
+        include = {get_peer_id(p) for p in list(folder_filter.include_peers) + list(folder_filter.pinned_peers)}
+        exclude = {get_peer_id(p) for p in folder_filter.exclude_peers}
+    targets = []
+    async for dialog in client.iter_dialogs():
+        entity = dialog.entity
+        if not is_send_target(entity):
+            continue
+        peer_id = get_peer_id(entity)
+        if folder_filter:
+            if peer_id in exclude:
+                continue
+            if peer_id not in include:
+                is_channel = isinstance(entity, Channel) and not entity.megagroup
+                flag = "broadcasts" if is_channel else "groups"
+                if not getattr(folder_filter, flag, False):
+                    continue
+                if getattr(folder_filter, "exclude_archived", False) and dialog.archived:
+                    continue
+                if getattr(folder_filter, "exclude_read", False) and not dialog.unread_count and not dialog.unread_mark:
+                    continue
+                if getattr(folder_filter, "exclude_muted", False):
+                    from datetime import datetime, timezone
+                    mute_until = getattr(dialog.dialog.notify_settings, "mute_until", None)
+                    if mute_until and mute_until > datetime.now(timezone.utc):
+                        continue
+        targets.append(target_record(entity))
+    return targets
 
 
 async def get_all_groups(user_db_id: int, session_string: str) -> List[Dict]:
@@ -647,17 +646,9 @@ async def get_all_groups(user_db_id: int, session_string: str) -> List[Dict]:
         async for dialog in client.iter_dialogs():
             entity = dialog.entity
             if isinstance(entity, Chat):
-                groups.append({
-                    "id": entity.id,
-                    "title": entity.title,
-                    "username": None,
-                })
-            elif isinstance(entity, Channel) and entity.megagroup:
-                groups.append({
-                    "id": entity.id,
-                    "title": entity.title,
-                    "username": getattr(entity, "username", None),
-                })
+                groups.append(target_record(entity))
+            elif isinstance(entity, Channel) and is_send_target(entity):
+                groups.append(target_record(entity))
 
             count += 1
             if count % 20 == 0:

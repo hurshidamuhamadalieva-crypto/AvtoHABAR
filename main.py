@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from logging.handlers import RotatingFileHandler
 import sys
 import os
 
@@ -9,7 +10,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from config import config
-from app.database import init_db
+from app.database import init_db, storage_maintenance
 from app.handlers import start, payment, phone, groups, broadcast, user_info, admin
 from app.middlewares.subscription import SubscriptionMiddleware, BanCheckCallbackMiddleware
 from app.services.scheduler import subscription_checker
@@ -22,7 +23,7 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler(os.path.join(config.LOGS_DIR, "bot.log"), encoding="utf-8"),
+        RotatingFileHandler(os.path.join(config.LOGS_DIR, "bot.log"), maxBytes=2 * 1024 * 1024, backupCount=3, encoding="utf-8"),
     ],
 )
 logger = logging.getLogger(__name__)
@@ -115,10 +116,10 @@ async def main():
     dp.include_router(user_info.router)
     dp.include_router(admin.router)
 
-    asyncio.create_task(subscription_checker(bot))
-    asyncio.create_task(cleanup_stale_logins())
-    asyncio.create_task(session_health_checker(bot))
-    asyncio.create_task(_webhook_guard(bot))
+    background = [asyncio.create_task(coro) for coro in (
+        subscription_checker(bot), cleanup_stale_logins(), session_health_checker(bot),
+        _webhook_guard(bot), storage_maintenance(),
+    )]
     logger.info("✅ Fon vazifalar ishga tushdi.")
     logger.info("✅ Bot ishlamoqda. To'xtatish uchun Ctrl+C bosing.")
 
@@ -128,6 +129,13 @@ async def main():
         pass
     finally:
         logger.info("🛑 Bot to'xtatildi.")
+        from app.services.sender_service import shutdown_senders
+        from app.services.telethon_service import _clients, disconnect_client
+        await shutdown_senders()
+        for task in background:
+            task.cancel()
+        await asyncio.gather(*background, return_exceptions=True)
+        await asyncio.gather(*(disconnect_client(uid) for uid in list(_clients)))
         await bot.session.close()
 
 

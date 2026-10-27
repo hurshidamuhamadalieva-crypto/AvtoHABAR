@@ -26,6 +26,7 @@ class BroadcastFlow(StatesGroup):
     E'lonlar / Interval / Yuborishni boshlash bo'limlari shu bittaga
     birlashtirildi.
     """
+    waiting_photo = State()
     waiting_text = State()
     choosing_interval = State()
     confirming = State()

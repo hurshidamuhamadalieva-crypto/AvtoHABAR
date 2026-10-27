@@ -109,6 +109,8 @@ class Advertisement(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     text = Column(Text, nullable=False)
+    photo_file_id = Column(String(256), nullable=True)
+    text_html = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     is_active = Column(Boolean, default=True)
 
@@ -122,6 +124,8 @@ class Group(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     group_id = Column(BigInteger, nullable=False)
     group_title = Column(String(256), nullable=True)
+    peer_type = Column(String(16), nullable=True)
+    access_hash = Column(BigInteger, nullable=True)
     group_username = Column(String(128), nullable=True)
     folder_name = Column(String(128), nullable=True)
     is_active = Column(Boolean, default=True)
@@ -159,6 +163,9 @@ class SendStat(Base):
 
 async def init_db():
     async with engine.begin() as conn:
+        if "sqlite" in config.DATABASE_URL:
+            await conn.exec_driver_sql("PRAGMA auto_vacuum=INCREMENTAL")
+            await conn.exec_driver_sql("PRAGMA busy_timeout=10000")
         await conn.run_sync(Base.metadata.create_all)
         # Railway'da allaqachon ishlayotgan (eski) bazada yangi ustunlar
         # avtomatik qo'shilmaydi (create_all faqat YO'Q jadvallarni yaratadi,
@@ -185,6 +192,15 @@ async def _ensure_columns(conn):
         "device_app_version": "VARCHAR(128)",
         "session_connected_at": "DATETIME",
     }
+    for table, columns in {
+        "advertisements": {"photo_file_id": "VARCHAR(256)", "text_html": "TEXT"},
+        "groups": {"peer_type": "VARCHAR(16)", "access_hash": "BIGINT"},
+    }.items():
+        rows = await conn.exec_driver_sql(f"PRAGMA table_info({table})")
+        existing = {row[1] for row in rows.fetchall()}
+        for name, kind in columns.items():
+            if name not in existing:
+                await conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
     result = await conn.exec_driver_sql("PRAGMA table_info(users)")
     existing_cols = {row[1] for row in result.fetchall()}
     for col_name, col_type in required.items():
@@ -315,16 +331,16 @@ async def get_active_advertisement(user_db_id: int) -> Optional[Advertisement]:
             .where(Advertisement.user_id == user_db_id, Advertisement.is_active == True)
             .order_by(Advertisement.created_at.desc())
         )
-        return result.scalar_one_or_none()
+        return result.scalars().first()
 
 
-async def save_advertisement(user_db_id: int, text: str):
+async def save_advertisement(user_db_id: int, text: str, photo_file_id=None, text_html=None):
     async with async_session_maker() as session:
         # Deactivate old ads
         await session.execute(
-            update(Advertisement).where(Advertisement.user_id == user_db_id).values(is_active=False)
+            delete(Advertisement).where(Advertisement.user_id == user_db_id)
         )
-        ad = Advertisement(user_id=user_db_id, text=text, is_active=True)
+        ad = Advertisement(user_id=user_db_id, text=text, photo_file_id=photo_file_id, text_html=text_html, is_active=True)
         session.add(ad)
         await session.commit()
 
@@ -350,6 +366,8 @@ async def save_groups(user_db_id: int, groups: list, folder_name: str):
             grp = Group(
                 user_id=user_db_id,
                 group_id=g["id"],
+                peer_type=g.get("peer_type"),
+                access_hash=g.get("access_hash"),
                 group_title=g.get("title", ""),
                 group_username=g.get("username", ""),
                 folder_name=folder_name,
@@ -457,3 +475,32 @@ async def get_total_stats():
             "total_revenue": total_payments,
             "messages_sent": messages_sent,
         }
+
+async def cleanup_history():
+    from datetime import timedelta
+    async with async_session_maker() as session:
+        await session.execute(delete(SendStat).where(
+            SendStat.sent_at < datetime.utcnow() - timedelta(days=config.STAT_RETENTION_DAYS)))
+        keep = select(SendStat.id).order_by(SendStat.id.desc()).limit(config.MAX_SEND_STATS)
+        await session.execute(delete(SendStat).where(SendStat.id.not_in(keep)))
+        await session.execute(delete(Advertisement).where(Advertisement.is_active == False))
+        await session.commit()
+    if "sqlite" in config.DATABASE_URL:
+        # Return free pages to the OS without a full blocking VACUUM.
+        async with engine.connect() as conn:
+            conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
+            free = (await conn.exec_driver_sql("PRAGMA freelist_count")).scalar()
+            pages = (await conn.exec_driver_sql("PRAGMA page_count")).scalar()
+            if free >= 1024 and free > pages // 4:
+                await conn.exec_driver_sql("VACUUM")
+            else:
+                await conn.exec_driver_sql("PRAGMA incremental_vacuum(1000)")
+
+
+async def storage_maintenance():
+    while True:
+        try:
+            await cleanup_history()
+        except Exception:
+            logger.exception("History cleanup failed")
+        await asyncio.sleep(3600)

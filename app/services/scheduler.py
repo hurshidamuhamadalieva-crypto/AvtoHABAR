@@ -45,6 +45,8 @@ async def _deactivate_expired(bot):
     for sub in subs:
         try:
             user = await get_user_by_db_id(sub.user_id)
+            from app.services.sender_service import stop_all_for_user
+            await stop_all_for_user(sub.user_id)
             await deactivate_subscription(sub.id, sub.user_id)
             if user:
                 await bot.send_message(

@@ -24,7 +24,7 @@ GROUPS_PER_PAGE = 10
 
 # guruh-tanlash ekrani uchun vaqtinchalik keshlar (foydalanuvchi Telegram ID bo'yicha)
 _picker_all_groups = {}   # user_tg_id -> [group dicts]
-_picker_selected_ids = {}  # user_tg_id -> set(abs(group_id))
+_picker_selected_ids = {}  # user_tg_id -> set(telethon_service.target_key(group_id))
 
 
 def _check_active(user) -> bool:
@@ -71,17 +71,17 @@ async def cb_open_groups_menu(call: CallbackQuery, state: FSMContext):
             group_list += f"\n  ... va yana {len(existing_groups) - 8} ta"
 
         await call.message.edit_text(
-            f"📂 <b>Guruhlar boshqaruvi</b>\n\n"
+            f"📂 <b>Guruh va kanallar boshqaruvi</b>\n\n"
             f"📁 Joriy jild: <b>{folder_name}</b>\n"
-            f"👥 Guruhlar soni: <b>{len(existing_groups)}</b>\n\n"
-            f"<b>Guruhlar:</b>\n{group_list}\n\n"
+            f"👥 Guruh va kanallar soni: <b>{len(existing_groups)}</b>\n\n"
+            f"<b>Guruh va kanallar:</b>\n{group_list}\n\n"
             "Nima qilishni xohlaysiz?",
             parse_mode="HTML",
             reply_markup=kb_groups_menu()
         )
     else:
         await call.message.edit_text(
-            "📂 <b>Guruhlar boshqaruvi</b>\n\n"
+            "📂 <b>Guruh va kanallar boshqaruvi</b>\n\n"
             "📭 Hali guruhlar qo'shilmagan.\n\n"
             "Jild tanlash orqali guruhlarni import qiling:",
             parse_mode="HTML",
@@ -148,8 +148,8 @@ async def cb_bot_folder(call: CallbackQuery, state: FSMContext):
 
         await loading.edit_text(
             "✅ <b>'Bot uchun' jildidan guruhlar olindi!</b>\n\n"
-            f"👥 Guruhlar: <b>{len(groups)}</b>\n\n"
-            f"<b>Guruhlar:</b>\n{group_list}\n\n"
+            f"👥 Guruh va kanallar: <b>{len(groups)}</b>\n\n"
+            f"<b>Guruh va kanallar:</b>\n{group_list}\n\n"
             "💡 <i>Yangi guruh qo'shmoqchi bo'lsangiz, uni Telegram "
             "ilovangizda 'Bot uchun' jildiga qo'shing yoki pastdagi tugma "
             "orqali qo'shing, so'ng shu tugmani qayta bosing.</i>",
@@ -183,7 +183,7 @@ async def cb_bot_folder(call: CallbackQuery, state: FSMContext):
     await call.answer()
 
 
-# ─── Guruhlarni bot ichida, tugma orqali tanlash (sahifalab) ──────────────────
+# ─── Guruh va kanallarni bot ichida, tugma orqali tanlash (sahifalab) ──────────────────
 
 async def _render_picker_page(target_message, user_tg_id: int, page: int, edit: bool = True):
     all_groups = _picker_all_groups.get(user_tg_id, [])
@@ -196,7 +196,7 @@ async def _render_picker_page(target_message, user_tg_id: int, page: int, edit: 
     page_groups = all_groups[start:start + GROUPS_PER_PAGE]
 
     text = (
-        f"➕ <b>Guruhlarni tanlang</b>\n\n"
+        f"➕ <b>Guruh va kanallarni tanlang</b>\n\n"
         f"Bosilgan guruh ✅ (tanlangan) bo'lib qoladi, qayta bossangiz "
         f"➕ (olib tashlangan) holatga qaytadi.\n\n"
         f"📄 Sahifa: <b>{page + 1}/{total_pages}</b> · Jami guruhlar: <b>{len(all_groups)}</b> · "
@@ -234,7 +234,7 @@ async def cb_group_picker_open(call: CallbackQuery, state: FSMContext):
     # so'ramaymiz — bu tez ishlashi uchun. Faqat birinchi ochilishda
     # Telegram'dan so'raymiz.
     if call.from_user.id not in _picker_all_groups:
-        loading = await call.message.edit_text("⏳ <b>Guruhlar yuklanmoqda...</b>", parse_mode="HTML")
+        loading = await call.message.edit_text("⏳ <b>Guruh va kanallar yuklanmoqda...</b>", parse_mode="HTML")
         try:
             all_groups, selected_ids = await telethon_service.list_all_groups_with_selection(
                 user.id, user.session_string
@@ -252,7 +252,7 @@ async def cb_group_picker_open(call: CallbackQuery, state: FSMContext):
             await call.answer()
             return
         except Exception as e:
-            logger.error(f"Guruhlarni yuklashda xato {call.from_user.id}: {e}")
+            logger.error(f"Guruh va kanallarni yuklashda xato {call.from_user.id}: {e}")
             await loading.edit_text(
                 f"❌ <b>Xato:</b> <code>{str(e)[:200]}</code>",
                 parse_mode="HTML",
@@ -285,7 +285,7 @@ async def cb_group_picker_toggle(call: CallbackQuery, state: FSMContext):
     group_id = int(group_id_str)
 
     selected_ids = _picker_selected_ids.setdefault(call.from_user.id, set())
-    target_id = abs(group_id)
+    target_id = telethon_service.target_key(group_id)
     is_currently_selected = target_id in selected_ids
 
     add = not is_currently_selected
@@ -328,10 +328,9 @@ async def cb_group_picker_done(call: CallbackQuery, state: FSMContext):
     all_groups = _picker_all_groups.get(call.from_user.id, [])
     selected_ids = _picker_selected_ids.get(call.from_user.id, set())
 
-    final_groups = [g for g in all_groups if abs(g["id"]) in selected_ids]
+    final_groups = [g for g in all_groups if telethon_service.target_key(g["id"]) in selected_ids]
 
-    if final_groups:
-        await save_groups(user.id, final_groups, BOT_FOLDER_TITLE)
+    await save_groups(user.id, final_groups, BOT_FOLDER_TITLE)
 
     _picker_all_groups.pop(call.from_user.id, None)
     _picker_selected_ids.pop(call.from_user.id, None)
@@ -343,7 +342,7 @@ async def cb_group_picker_done(call: CallbackQuery, state: FSMContext):
     await call.message.edit_text(
         f"✅ <b>Tayyor!</b>\n\n"
         f"👥 Tanlangan guruhlar: <b>{len(final_groups)}</b>\n\n"
-        f"<b>Guruhlar:</b>\n{group_list if final_groups else '  <i>hech qaysi tanlanmadi</i>'}",
+        f"<b>Guruh va kanallar:</b>\n{group_list if final_groups else '  <i>hech qaysi tanlanmadi</i>'}",
         parse_mode="HTML",
         reply_markup=kb_back_inline("groups:back")
     )
@@ -355,7 +354,7 @@ async def cb_group_picker_back(call: CallbackQuery, state: FSMContext):
     _picker_all_groups.pop(call.from_user.id, None)
     _picker_selected_ids.pop(call.from_user.id, None)
     await call.message.edit_text(
-        "📂 Guruhlar boshqaruvi:",
+        "📂 Guruh va kanallar boshqaruvi:",
         reply_markup=kb_groups_menu()
     )
     await call.answer()
@@ -428,7 +427,7 @@ async def cb_choose_folder(call: CallbackQuery, state: FSMContext):
     except Exception as e:
         logger.error(f"Jildlarni yuklashda xato {call.from_user.id}: {e}")
         await loading.edit_text(
-            f"❌ <b>Guruhlarni yuklashda xato.</b>\n\n"
+            f"❌ <b>Guruh va kanallarni yuklashda xato.</b>\n\n"
             f"<code>{str(e)[:200]}</code>\n\n"
             "Hisobingizni qayta ulang.",
             parse_mode="HTML",
@@ -489,10 +488,10 @@ async def cb_folder_selected(call: CallbackQuery, state: FSMContext):
             group_list += f"\n  ... va yana {len(groups) - 10} ta"
 
         await loading_msg.edit_text(
-            f"✅ <b>Guruhlar muvaffaqiyatli import qilindi!</b>\n\n"
+            f"✅ <b>Guruh va kanallar muvaffaqiyatli import qilindi!</b>\n\n"
             f"📁 Jild: <b>{folder['title']}</b>\n"
-            f"👥 Guruhlar: <b>{len(groups)}</b>\n\n"
-            f"<b>Guruhlar:</b>\n{group_list}",
+            f"👥 Guruh va kanallar: <b>{len(groups)}</b>\n\n"
+            f"<b>Guruh va kanallar:</b>\n{group_list}",
             parse_mode="HTML",
             reply_markup=kb_back_inline("groups:back")
         )
@@ -512,9 +511,9 @@ async def cb_folder_selected(call: CallbackQuery, state: FSMContext):
         await call.answer()
         return
     except Exception as e:
-        logger.error(f"Guruhlarni import qilishda xato: {e}")
+        logger.error(f"Guruh va kanallarni import qilishda xato: {e}")
         await loading_msg.edit_text(
-            f"❌ <b>Guruhlarni import qilishda xato.</b>\n<code>{str(e)[:200]}</code>",
+            f"❌ <b>Guruh va kanallarni import qilishda xato.</b>\n<code>{str(e)[:200]}</code>",
             parse_mode="HTML",
             reply_markup=kb_back_inline("groups:back")
         )
@@ -522,12 +521,12 @@ async def cb_folder_selected(call: CallbackQuery, state: FSMContext):
     await call.answer()
 
 
-# ─── Guruhlarni tozalash ──────────────────────────────────────────────────────
+# ─── Guruh va kanallarni tozalash ──────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "groups:clear")
 async def cb_clear_groups_prompt(call: CallbackQuery, state: FSMContext):
     await call.message.edit_text(
-        "🗑 <b>Guruhlarni o'chirish</b>\n\n"
+        "🗑 <b>Guruh va kanallarni o'chirish</b>\n\n"
         "Barcha saqlangan guruhlar o'chiriladi.\n"
         "Davom etishni xohlaysizmi?",
         parse_mode="HTML",
@@ -551,7 +550,7 @@ async def cb_confirm_clear_groups(call: CallbackQuery, state: FSMContext):
     await state.clear()
     await call.message.edit_text(
         "✅ <b>Barcha guruhlar o'chirildi!</b>\n\n"
-        "Yangi guruhlar qo'shish uchun <b>📂 Guruh qo'shish</b> tugmasini bosing.",
+        "Yangi guruhlar qo'shish uchun <b>📂 Guruh/kanal qo'shish</b> tugmasini bosing.",
         parse_mode="HTML"
     )
     await call.message.answer(

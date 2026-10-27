@@ -17,6 +17,8 @@ class Config:
     CARD_HOLDER: str = os.getenv("CARD_HOLDER", "JOHN DOE")
     SESSIONS_DIR: str = "data/sessions"
     LOGS_DIR: str = "logs"
+    STAT_RETENTION_DAYS: int = max(1, int(os.getenv("STAT_RETENTION_DAYS", "7")))
+    MAX_SEND_STATS: int = max(100, int(os.getenv("MAX_SEND_STATS", "20000")))
 
     # Proksi ro'yxati (ixtiyoriy, lekin ko'p akaunt bilan bitta serverdan (masalan,
     # Railway) ulanganda TAVSIYA ETILADI). Har bir yangi "raqam ulash" urinishi

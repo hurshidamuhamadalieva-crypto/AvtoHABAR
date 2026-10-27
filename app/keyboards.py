@@ -5,6 +5,7 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
 from config import config
+from app.services.telethon_service import target_key
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Deyarli barcha tugmalar endi INLINE (xabar ostida chiqadigan) tugmalar.
@@ -56,7 +57,7 @@ def kb_main_menu(is_admin: bool = False, has_phone: bool = False) -> InlineKeybo
     builder = InlineKeyboardBuilder()
     phone_label = "🔄 Raqamni boshqarish" if has_phone else "📱 Raqam qo'shish"
     builder.button(text=phone_label, callback_data="menu:phone")
-    builder.button(text="📂 Guruh qo'shish", callback_data="menu:groups")
+    builder.button(text="📂 Guruh/kanal qo'shish", callback_data="menu:groups")
     builder.button(text="📢 E'lon yuborish", callback_data="menu:broadcast")
     builder.button(text="💰 To'lovlarim", callback_data="menu:payments")
     builder.button(text="👨‍💼 Admin bilan bog'lanish", callback_data="menu:contact_admin")
@@ -98,6 +99,7 @@ def kb_broadcast_menu(is_sending: bool, has_ad: bool) -> InlineKeyboardMarkup:
         if has_ad:
             builder.button(text="♻️ Oxirgi e'londan davom etish", callback_data="bc_continue")
         builder.button(text="🆕 Yangi e'lon yozish", callback_data="bc_new")
+        builder.button(text="🖼 Rasmli e'lon yuborish", callback_data="bc_photo")
     builder.button(text="🔙 Asosiy menyu", callback_data="menu:home")
     builder.adjust(1)
     return builder.as_markup()
@@ -106,6 +108,7 @@ def kb_broadcast_menu(is_sending: bool, has_ad: bool) -> InlineKeyboardMarkup:
 def kb_broadcast_sending(is_paused: bool) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     if is_paused:
+        builder.button(text="✏️ Tahrirlash", callback_data="bc_edit")
         builder.button(text="▶️ Davom ettirish", callback_data="bc_resume")
     else:
         builder.button(text="⏸ Pauza", callback_data="bc_pause")
@@ -119,6 +122,7 @@ def kb_admin_panel() -> InlineKeyboardMarkup:
     builder.button(text="👥 Foydalanuvchilar", callback_data="admin:users")
     builder.button(text="💰 To'lovlar", callback_data="admin:payments")
     builder.button(text="📊 Statistika", callback_data="admin:stats")
+    builder.button(text="🌐 Proxy", callback_data="admin:proxies")
     builder.button(text="📢 Xabar yuborish", callback_data="admin:broadcast")
     builder.button(text="🚫 Bloklash", callback_data="admin:ban")
     builder.button(text="✅ Foydalanuvchini tasdiqlash", callback_data="admin:approve")
@@ -149,7 +153,7 @@ def kb_groups_menu() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="🆕 'Bot uchun' jild yaratish/yangilash", callback_data="groups:bot_folder")
     builder.button(text="📁 Boshqa (o'zim tayyorlagan) jildni tanlash", callback_data="groups:choose_folder")
-    builder.button(text="🗑 Guruhlarni tozalash", callback_data="groups:clear")
+    builder.button(text="🗑 Guruh va kanallarni tozalash", callback_data="groups:clear")
     builder.button(text="🔙 Orqaga", callback_data="groups:back")
     builder.adjust(1)
     return builder.as_markup()
@@ -158,7 +162,7 @@ def kb_groups_menu() -> InlineKeyboardMarkup:
 def kb_bot_folder_actions() -> InlineKeyboardMarkup:
     """'Bot uchun' jildi ekranida ko'rsatiladigan tugmalar."""
     builder = InlineKeyboardBuilder()
-    builder.button(text="➕ Guruhlarni qo'shish", callback_data="gp_open:0")
+    builder.button(text="➕ Guruh va kanallarni qo'shish", callback_data="gp_open:0")
     builder.button(text="🔙 Orqaga", callback_data="groups:back")
     builder.adjust(1)
     return builder.as_markup()
@@ -166,13 +170,13 @@ def kb_bot_folder_actions() -> InlineKeyboardMarkup:
 
 def kb_group_picker(groups_page: list, selected_ids: set, page: int, total_pages: int) -> InlineKeyboardMarkup:
     """
-    Guruhlarni sahifalab (10 tadan), tugma bosib tanlash/bekor qilish
+    Guruh va kanallarni sahifalab (10 tadan), tugma bosib tanlash/bekor qilish
     uchun klaviatura. Tanlangan guruh ✅, tanlanmagan ➕ belgisi bilan
     ko'rsatiladi.
     """
     builder = InlineKeyboardBuilder()
     for g in groups_page:
-        is_selected = abs(g["id"]) in selected_ids
+        is_selected = target_key(g["id"]) in selected_ids
         mark = "✅" if is_selected else "➕"
         title = g["title"] if len(g["title"]) <= 32 else g["title"][:29] + "..."
         builder.button(text=f"{mark} {title}", callback_data=f"gp:{page}:{g['id']}")

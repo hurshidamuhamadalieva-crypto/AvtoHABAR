@@ -286,3 +286,32 @@ kelmasligi ehtimoli baribir qoladi, chunki bu Telegramning o'z tomonidagi
 cheklov, uni faqat haqiqiy, turli IP manzillar (ya'ni real proksilar) orqali
 "aylanib o'tish" mumkin. Kodni o'zi sun'iy ravishda "har doim kep-kelaveradigan"
 qilib bo'lmaydi — bu Telegram serverining xavfsizlik siyosati.
+
+
+## 2026-10-27 yangilanishi
+
+- Guruhlar bilan birga ulangan hisob post joylay oladigan kanallar ham tanlanadi.
+  Kanal egasi yoki post joylash huquqiga ega administrator bo'lish kerak.
+  Avvalgi ro'yxatni yangilash uchun guruh/kanallarni qayta import qiling.
+- E'lon menyusida **Rasmli e'lon yuborish**: rasm → matn → interval → tasdiqlash.
+  Rasmli matn 1024, oddiy matn 4096 Telegram belgisigacha. Qalin matn va havolalar saqlanadi.
+- Pauzada **Tahrirlash** chiqadi. Yangi matn yuborilgach eski interval bilan davom etadi.
+  Rasm saqlanadi; tahrirlash vaqtida yangi foto yuborib uni almashtirish mumkin.
+- Admin panelidagi **Proxy** barcha sozlangan proksilar orqali Telegramga tunnel
+  ulanishini tekshiradi. Bir vaqtda ko'pi bilan 8 ta tekshiruv, ulanishga 5 soniya;
+  natija 60 soniya keshlanadi. Bu proksining ayni paytdagi ulanish holati.
+- Rasm Bot API file_id orqali saqlanadi; server diskiga yuklab yig'ilmaydi.
+  Bir yuborish vazifasida bir rasm Telegramga bir marta yuklanib qayta ishlatiladi.
+- Loglar 2 MB dan 4 fayl bilan cheklanadi. Muvaffaqiyatli har bir yuborish
+  alohida INFO logga yozilmaydi; sikl yakuni yoziladi.
+- Yuborish tafsilotlari har soatda tozalanadi: odatda oxirgi 7 kun, eng yangi
+  20000 yozuv. Umumiy yuborilgan xabarlar hisoblagichi saqlanadi. Sozlamalar:
+  `STAT_RETENTION_DAYS=7`, `MAX_SEND_STATS=20000`. Faqat joriy e'lon saqlanadi.
+  SQLite'da yetarlicha bo'sh sahifa yig'ilsa disk joyi qaytariladi.
+- Obuna tugaganda va hisob uzilganda yuborish to'xtatiladi. Eski inline
+  tugmalarda obuna cheklovi tekshiriladi. Dastur yopilganda fon vazifalari va
+  Telethon ulanishlari yopiladi.
+- Mavjud SQLite bazasiga yangi ustunlar bot ishga tushganda avtomatik qo'shiladi.
+  Docker yangilanishida `data/` doimiy diskka ulangan bo'lishi kerak.
+
+Tekshiruv: `python -m unittest discover -s tests -v`.
