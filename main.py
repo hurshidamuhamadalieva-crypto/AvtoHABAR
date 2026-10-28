@@ -131,7 +131,9 @@ async def main():
         logger.info("🛑 Bot to'xtatildi.")
         from app.services.sender_service import shutdown_senders
         from app.services.telethon_service import _clients, disconnect_client
+        from app.handlers.phone import shutdown_logins
         await shutdown_senders()
+        await shutdown_logins()
         for task in background:
             task.cancel()
         await asyncio.gather(*background, return_exceptions=True)

@@ -13,6 +13,7 @@ class PhoneFlow(StatesGroup):
     entering_phone = State()
     entering_code = State()
     entering_password = State()
+    waiting_qr = State()
 
 
 class GroupFlow(StatesGroup):

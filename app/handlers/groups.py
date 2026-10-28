@@ -1,4 +1,5 @@
 import logging
+from app.access import has_access
 from datetime import datetime, timedelta
 
 from aiogram import Router, F
@@ -28,7 +29,7 @@ _picker_selected_ids = {}  # user_tg_id -> set(telethon_service.target_key(group
 
 
 def _check_active(user) -> bool:
-    return user and user.is_active and not user.is_banned
+    return has_access(user)
 
 
 def _warmup_remaining_seconds(user) -> int:

@@ -1,5 +1,12 @@
 import asyncio
 import logging
+import io
+from html import escape
+from contextlib import suppress
+from telethon import errors
+from aiogram.types import BufferedInputFile
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+from app.access import has_access
 import re
 import time
 from datetime import datetime
@@ -29,16 +36,33 @@ PENDING_LOGIN_TTL = 600  # 10 daqiqa
 
 
 def _check_active(user) -> bool:
-    return user and user.is_active and not user.is_banned
+    return has_access(user)
 
 
 async def _disconnect_pending(user_tg_id: int):
     pending = _pending_logins.pop(user_tg_id, None)
-    if pending:
-        try:
-            await pending["client"].disconnect()
-        except Exception:
-            pass
+    if not pending:
+        return
+    task = pending.get("task")
+    if task and task is not asyncio.current_task() and not task.done():
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+    with suppress(Exception):
+        await pending["client"].disconnect()
+    if pending.get("qr_message"):
+        with suppress(Exception):
+            await pending["qr_message"].delete()
+
+
+def _login_controls(resend=False):
+    builder = InlineKeyboardBuilder()
+    if resend:
+        builder.button(text="🔄 Kodni qayta so'rash", callback_data="phone:resend")
+    builder.button(text="📷 QR orqali ulash (kodsiz)", callback_data="phone:qr")
+    builder.button(text="❌ Bekor qilish", callback_data="phone:cancel")
+    builder.adjust(1)
+    return builder.as_markup()
 
 
 async def cleanup_stale_logins():
@@ -256,38 +280,35 @@ async def _process_phone(message: Message, state: FSMContext, phone: str):
             "created_at": time.time(),
             "proxy_key": proxy_key,
             "device": device,
+            "resend_at": time.monotonic() + max(30, result.timeout or 60),
+            "can_resend": result.next_type is not None,
+            "resend_used": False,
+            "code_length": getattr(result.type, "length", 5),
         }
         await state.update_data(phone=phone)
         await state.set_state(PhoneFlow.entering_code)
 
         await message.answer(
-            "✅ <b>Tasdiqlash kodi yuborildi!</b>\n\n"
-            f"📱 Raqam: <code>{phone}</code>\n\n"
-            "📝 Kodni quyidagi formatda kiriting:\n"
-            "<b>1 2 . 3 4 5</b>  →  <code>12.345</code>\n\n"
-            "⚠️ Nuqta birinchi 2 va oxirgi 3 raqamni ajratadi.\n\n"
-            "🔒 <i>Bu kodni hech kimga bermang!</i>",
-            parse_mode="HTML",
-            reply_markup=kb_cancel_inline("phone:cancel")
-        )
+            "📨 <b>Telegram javobi</b>\n\n" + telethon_service.code_delivery(result) +
+            "\n\nKodni yozib yuboring. Kod kelmasa, pastdagi QR orqali ulashdan foydalaning.",
+            parse_mode="HTML", reply_markup=_login_controls(result.next_type is not None))
 
-    except telethon_service.ProxyConnectionException as exc:
+    except telethon_service.DirectConnectionException as exc:
         from html import escape
         await message.answer(
             "❌ <b>Ulanish amalga oshmadi</b>\n\n" + escape(str(exc)),
-            parse_mode="HTML", reply_markup=kb_cancel_inline("phone:cancel"))
+            parse_mode="HTML", reply_markup=_login_controls())
         await state.set_state(PhoneFlow.entering_phone)
 
     except telethon_service.FloodWaitException as e:
-        minutes = max(1, e.seconds // 60)
+        minutes = max(1, (e.seconds + 59) // 60)
         logger.warning(f"FloodWait {e.seconds}s — {phone} uchun")
         await message.answer(
             "⏳ <b>Telegram vaqtincha yangi kod so'rovlarini cheklab qo'ydi.</b>\n\n"
             f"Iltimos, taxminan <b>{minutes} daqiqadan</b> so'ng qayta urinib ko'ring.\n\n"
-            "💡 Bu — bitta IP manzildan ko'p urinish qilinganda Telegram tomonidan "
-            "qo'yiladigan vaqtinchalik cheklov, xatolik emas.",
+            "Telegram qaytargan kutish muddati tugagach qayta urinib ko'ring.",
             parse_mode="HTML",
-            reply_markup=kb_cancel_inline("phone:cancel")
+            reply_markup=_login_controls()
         )
         await state.set_state(PhoneFlow.entering_phone)
 
@@ -295,171 +316,174 @@ async def _process_phone(message: Message, state: FSMContext, phone: str):
         logger.error(f"Kod yuborishda xato {phone}: {e}")
         await message.answer(
             f"❌ <b>Kod yuborib bo'lmadi</b>\n\n"
-            f"Xato: <code>{str(e)[:200]}</code>\n\n"
+            f"Xato: <code>{escape(str(e)[:200])}</code>\n\n"
             "Raqamni tekshirib qayta urinib ko'ring.",
             parse_mode="HTML",
-            reply_markup=kb_cancel_inline("phone:cancel")
+            reply_markup=_login_controls()
         )
         await state.set_state(PhoneFlow.entering_phone)
 
 
+async def _finish_login(message, state, pending):
+    account = await asyncio.wait_for(pending["client"].get_me(), timeout=20)
+    if not account or getattr(account, "bot", False):
+        raise telethon_service.DirectConnectionException("Shaxsiy Telegram hisobini ulang.")
+    user = await get_or_create_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
+    device = pending.get("device") or telethon_service.DEVICE_PROFILE
+    await update_user(message.from_user.id,
+                      session_string=pending["client"].session.save(),
+                      phone_number=getattr(account, "phone", None) or pending.get("phone"),
+                      proxy_key=None, proxy_index=None, device_model=device[0],
+                      device_system_version=device[1], device_app_version=device[2],
+                      session_connected_at=datetime.utcnow())
+    await _disconnect_pending(message.from_user.id)
+    await state.clear()
+    await message.answer("✅ <b>Telegram hisobingiz proksisiz ulandi!</b>",
+                         reply_markup=kb_main_menu(is_admin=user.is_admin, has_phone=True))
+
+
 @router.message(PhoneFlow.entering_code, F.text)
 async def receive_code(message: Message, state: FSMContext):
-    text = message.text.strip()
-
-    code = text.replace(".", "").replace(" ", "").strip()
-    if not code.isdigit() or len(code) < 4:
-        await message.answer(
-            "❌ Noto'g'ri format. Kodni shunday kiriting:\n<code>12.345</code>",
-            parse_mode="HTML",
-            reply_markup=kb_cancel_inline("phone:cancel")
-        )
-        return
-
     pending = _pending_logins.get(message.from_user.id)
-    if not pending:
-        await message.answer("❌ Sessiya muddati o'tdi. /start dan qayta boshlang.")
-        await state.clear()
+    if not pending or pending.get("qr"):
+        await message.answer("Kirish muddati o'tdi. Hisobni qayta ulang.", reply_markup=_login_controls())
         return
-
-    loading_msg = await message.answer("⏳ <b>Kod tekshirilmoqda...</b>", parse_mode="HTML")
-
+    code = re.sub(r"[\s.-]", "", message.text)
+    if not code.isdigit() or len(code) != pending.get("code_length", 5):
+        await message.answer("Kod formatini tekshiring va qayta kiriting.")
+        return
     try:
-        session_string = await telethon_service.sign_in(
-            client=pending["client"],
-            phone=pending["phone"],
-            code=code,
-            phone_code_hash=pending["phone_code_hash"],
-        )
-
-        user = await get_or_create_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
-        device = pending.get("device") or (None, None, None)
-        await update_user(
-            message.from_user.id,
-            session_string=session_string,
-            phone_number=pending["phone"],
-            proxy_key=pending.get("proxy_key"),
-            device_model=device[0],
-            device_system_version=device[1],
-            device_app_version=device[2],
-            session_connected_at=datetime.utcnow(),
-        )
-
-        # Muvaqqat login klientini yopamiz — doimiy ulanish keyinchalik
-        # telethon_service.get_client() orqali alohida, boshqariladigan pool'da
-        # qayta ochiladi. Buni yopmasak, har bir muvaffaqiyatli ulanishdan keyin
-        # ham ortiqcha, boshqarilmaydigan bitta ulanish serverda "osilib" qolar
-        # va vaqt o'tishi bilan (bir necha soat/kundan keyin) resurs yetishmay,
-        # YANGI foydalanuvchilarga tasdiqlash kodi kelmay qolishiga sabab bo'lardi.
-        try:
-            await pending["client"].disconnect()
-        except Exception:
-            pass
-        _pending_logins.pop(message.from_user.id, None)
+        await telethon_service.sign_in(pending["client"], pending["phone"], code, pending["phone_code_hash"])
+        await _finish_login(message, state, pending)
+    except errors.SessionPasswordNeededError:
+        await state.set_state(PhoneFlow.entering_password)
+        await message.answer("🔐 Ikki bosqichli tasdiqlash yoqilgan. Bulut parolingizni kiriting:",
+                             reply_markup=kb_cancel_inline("phone:cancel"))
+    except errors.PhoneCodeInvalidError:
+        await message.answer("❌ Kod noto'g'ri. Qayta kiriting.")
+    except errors.PhoneCodeExpiredError:
+        await _disconnect_pending(message.from_user.id)
         await state.clear()
-
-        await loading_msg.edit_text(
-            "✅ <b>Hisob muvaffaqiyatli ulandi!</b>\n\n"
-            f"📱 Raqam: <code>{pending['phone']}</code>\n\n"
-            "Telegram hisobingiz botga ulandi.\n"
-            "Endi guruhlar qo'shib, e'lon yuborishni boshlashingiz mumkin!",
-            parse_mode="HTML"
-        )
-        await message.answer(
-            "📋 Asosiy menyuga qaytish:",
-            reply_markup=kb_main_menu(is_admin=user.is_admin, has_phone=True)
-        )
-
-    except Exception as e:
-        err_str = str(e)
-        if "SessionPasswordNeeded" in err_str or "password" in err_str.lower():
-            await state.set_state(PhoneFlow.entering_password)
-            await state.update_data(code=code)
-            await loading_msg.edit_text(
-                "🔐 <b>Ikki bosqichli tasdiqlash</b>\n\n"
-                "Hisobingizda 2FA yoqilgan.\n"
-                "<b>Bulut parolingizni</b> kiriting:",
-                parse_mode="HTML",
-                reply_markup=kb_cancel_inline("phone:cancel")
-            )
-        elif "PhoneCodeInvalid" in err_str:
-            await loading_msg.edit_text(
-                "❌ <b>Noto'g'ri kod!</b>\n\nTo'g'ri kodni kiriting:",
-                parse_mode="HTML",
-                reply_markup=kb_cancel_inline("phone:cancel")
-            )
-        elif "PhoneCodeExpired" in err_str:
-            await loading_msg.edit_text(
-                "❌ <b>Kod muddati o'tdi!</b>\n\n/start dan qayta boshlang.",
-                parse_mode="HTML"
-            )
-            await _disconnect_pending(message.from_user.id)
-            await state.clear()
-        else:
-            logger.error(f"Kirish xatosi {message.from_user.id}: {e}")
-            await loading_msg.edit_text(
-                f"❌ <b>Xato:</b> <code>{err_str[:200]}</code>\n\nQayta urinib ko'ring.",
-                parse_mode="HTML",
-                reply_markup=kb_cancel_inline("phone:cancel")
-            )
+        await message.answer("Kod muddati tugadi. Qayta ulang yoki QR orqali kiring.", reply_markup=_login_controls())
+    except errors.FloodWaitError as exc:
+        await message.answer(f"Telegram {exc.seconds} soniya kutishni so'radi.")
+    except Exception:
+        logger.exception("Account sign-in failed")
+        await message.answer("Kirish bajarilmadi. Qayta urinib ko'ring yoki QR orqali ulang.", reply_markup=_login_controls())
 
 
 @router.message(PhoneFlow.entering_password, F.text)
 async def receive_2fa_password(message: Message, state: FSMContext):
     pending = _pending_logins.get(message.from_user.id)
     if not pending:
-        await message.answer("❌ Sessiya muddati o'tdi. Qayta boshlang.")
         await state.clear()
+        await message.answer("Kirish muddati tugadi. Qayta ulang.", reply_markup=_login_controls())
         return
-
-    text = message.text.strip()
-    data = await state.get_data()
-    loading_msg = await message.answer("⏳ <b>Parol tekshirilmoqda...</b>", parse_mode="HTML")
-
     try:
-        session_string = await telethon_service.sign_in(
-            client=pending["client"],
-            phone=pending["phone"],
-            code=data.get("code", ""),
-            phone_code_hash=pending["phone_code_hash"],
-            password=text,
-        )
+        await telethon_service.sign_in(pending["client"], pending.get("phone", ""), "", "", password=message.text)
+        await _finish_login(message, state, pending)
+    except errors.PasswordHashInvalidError:
+        await message.answer("❌ Bulut paroli noto'g'ri. Qayta kiriting.")
+    except errors.FloodWaitError as exc:
+        await message.answer(f"Telegram {exc.seconds} soniya kutishni so'radi.")
+    except Exception:
+        logger.exception("2FA sign-in failed")
+        await message.answer("Tasdiqlash amalga oshmadi. Qayta urinib ko'ring.")
+    finally:
+        with suppress(Exception):
+            await message.delete()
 
-        user = await get_or_create_user(message.from_user.id)
-        device = pending.get("device") or (None, None, None)
-        await update_user(
-            message.from_user.id,
-            session_string=session_string,
-            phone_number=pending["phone"],
-            proxy_key=pending.get("proxy_key"),
-            device_model=device[0],
-            device_system_version=device[1],
-            device_app_version=device[2],
-            session_connected_at=datetime.utcnow(),
-        )
 
-        try:
-            await pending["client"].disconnect()
-        except Exception:
-            pass
-        _pending_logins.pop(message.from_user.id, None)
+@router.callback_query(PhoneFlow.entering_code, F.data == "phone:resend")
+async def cb_resend_code(call: CallbackQuery, state: FSMContext):
+    pending = _pending_logins.get(call.from_user.id)
+    if not pending or pending.get("qr") or not pending.get("can_resend") or pending.get("resend_used"):
+        await call.answer("Qayta so'rash mavjud emas. QR orqali ulashing.", show_alert=True)
+        return
+    remaining = int(pending["resend_at"] - time.monotonic())
+    if remaining > 0:
+        await call.answer(f"Yana {remaining + 1} soniya kuting.", show_alert=True)
+        return
+    pending["resend_used"] = True
+    await call.answer("Telegramdan qayta so'ralmoqda...")
+    try:
+        result = await telethon_service.resend_code(pending["client"], pending["phone"], pending["phone_code_hash"])
+        pending["phone_code_hash"] = result.phone_code_hash
+        pending["code_length"] = getattr(result.type, "length", 5)
+        await call.message.answer(telethon_service.code_delivery(result), reply_markup=_login_controls())
+    except telethon_service.FloodWaitException as exc:
+        await call.message.answer(f"Telegram {exc.seconds} soniya kutishni so'radi.", reply_markup=_login_controls())
+    except Exception:
+        await call.message.answer("Kodni qayta so'rab bo'lmadi. QR orqali ulang.", reply_markup=_login_controls())
+
+
+def _qr_image(url):
+    import qrcode
+    from qrcode.image.pure import PyPNGImage
+    output = io.BytesIO()
+    qrcode.make(url, image_factory=PyPNGImage, box_size=6, border=4).save(output)
+    return output.getvalue()
+
+
+@router.callback_query(F.data == "phone:qr")
+async def cb_qr_login(call: CallbackQuery, state: FSMContext):
+    user = await get_or_create_user(call.from_user.id)
+    if not has_access(user):
+        await call.answer("Faol obuna kerak.", show_alert=True)
+        return
+    await call.answer("QR tayyorlanmoqda...")
+    await _disconnect_pending(call.from_user.id)
+    from app.services.sender_service import stop_all_for_user
+    await stop_all_for_user(user.id)
+    await telethon_service.disconnect_client(user.id)
+    await state.clear()
+    client = None
+    try:
+        client = await telethon_service.connect_login_client()
+        qr = await asyncio.wait_for(client.qr_login(), timeout=30)
+        image = _qr_image(qr.url)
+        qr_message = await call.message.answer_photo(BufferedInputFile(image, filename="telegram-login.png"),
+            caption="📷 Telegram → Sozlamalar → Qurilmalar → Qurilma ulash orqali shu QR'ni skanerlang. "
+                    "QR'ni boshqa ekranda oching. Kod kelishini kutish kerak emas. QR muddati qisqa; eskirsa yangisini oling.",
+            reply_markup=_login_controls())
+        pending = {"client": client, "qr": True, "created_at": time.time(),
+                   "device": telethon_service.DEVICE_PROFILE, "qr_message": qr_message}
+        _pending_logins[call.from_user.id] = pending
+        await state.set_state(PhoneFlow.waiting_qr)
+        pending["task"] = asyncio.create_task(_wait_qr(call, state, pending, qr))
+    except Exception:
+        if client:
+            await telethon_service._safe_disconnect(client)
+        logger.warning("QR preparation failed", exc_info=False)
+        await call.message.answer("QR tayyorlab bo'lmadi. Qayta urinib ko'ring.", reply_markup=_login_controls())
+
+
+async def _wait_qr(call, state, pending, qr):
+    # Use the callback sender, not the bot-authored message's from_user.
+    class Target:
+        from_user = call.from_user
+        async def answer(self, *args, **kwargs):
+            return await call.message.answer(*args, **kwargs)
+    try:
+        await qr.wait()
+        await _finish_login(Target(), state, pending)
+    except errors.SessionPasswordNeededError:
+        with suppress(Exception):
+            await pending["qr_message"].delete()
+        await state.set_state(PhoneFlow.entering_password)
+        await call.message.answer("🔐 QR tasdiqlandi. Endi Telegram bulut parolingizni kiriting:",
+                                  reply_markup=kb_cancel_inline("phone:cancel"))
+    except asyncio.TimeoutError:
+        await _disconnect_pending(call.from_user.id)
         await state.clear()
+        await call.message.answer("QR muddati tugadi. Yangi QR oling.", reply_markup=_login_controls())
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        await _disconnect_pending(call.from_user.id)
+        await state.clear()
+        await call.message.answer("QR tasdiqlanmadi. Qayta urinib ko'ring.", reply_markup=_login_controls())
 
-        await loading_msg.edit_text(
-            "✅ <b>Hisob ulandi!</b>\n\n"
-            "Ikki bosqichli tasdiqlash muvaffaqiyatli o'tdi.\n"
-            "Hisobingiz ulandi!",
-            parse_mode="HTML"
-        )
-        await message.answer(
-            "📋 Asosiy menyu:",
-            reply_markup=kb_main_menu(is_admin=user.is_admin, has_phone=True)
-        )
 
-    except Exception as e:
-        logger.error(f"2FA xatosi {message.from_user.id}: {e}")
-        await loading_msg.edit_text(
-            "❌ <b>Noto'g'ri parol!</b>\n\nQayta kiriting:",
-            parse_mode="HTML",
-            reply_markup=kb_cancel_inline("phone:cancel")
-        )
+async def shutdown_logins():
+    await asyncio.gather(*(_disconnect_pending(uid) for uid in list(_pending_logins)), return_exceptions=True)

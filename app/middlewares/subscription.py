@@ -89,7 +89,7 @@ class BanCheckCallbackMiddleware(BaseMiddleware):
             return
 
         callback = event.data or ""
-        if callback.startswith(("bc_", "gp:", "gp_", "groups:", "folder:", "phone:agree")) and callback not in ("bc_stop", "bc_cancel", "groups:back"):
+        if callback.startswith(("bc_", "gp:", "gp_", "groups:", "folder:", "phone:agree", "phone:qr", "phone:resend")) and callback not in ("bc_stop", "bc_cancel", "groups:back"):
             if not user.is_active or not user.session_string and callback.startswith("bc_"):
                 await event.answer("Faol obuna va ulangan hisob kerak.", show_alert=True)
                 return

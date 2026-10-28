@@ -22,6 +22,12 @@ logger = logging.getLogger(__name__)
 
 @router.callback_query(F.data.startswith("plan:"))
 async def cb_select_plan(call: CallbackQuery, state: FSMContext):
+    if call.from_user.id in config.ADMIN_IDS:
+        await state.clear()
+        await call.message.answer("⚙️ Admin uchun to'lov va obuna talab qilinmaydi.",
+                                  reply_markup=kb_main_menu(is_admin=True))
+        await call.answer()
+        return
     plan_key = call.data.split(":")[1]
     plan = config.PLANS.get(plan_key)
     if not plan:
@@ -75,6 +81,12 @@ async def cb_back_to_method(call: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "pay:admin")
 async def cb_pay_admin(call: CallbackQuery, state: FSMContext):
+    if call.from_user.id in config.ADMIN_IDS:
+        await state.clear()
+        await call.message.answer("⚙️ Admin uchun to'lov va obuna talab qilinmaydi.",
+                                  reply_markup=kb_main_menu(is_admin=True))
+        await call.answer()
+        return
     data = await state.get_data()
     plan_key = data.get("plan_key")
     plan = config.PLANS.get(plan_key)
@@ -127,6 +139,12 @@ async def cb_pay_admin(call: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "pay:card")
 async def cb_pay_card(call: CallbackQuery, state: FSMContext):
+    if call.from_user.id in config.ADMIN_IDS:
+        await state.clear()
+        await call.message.answer("⚙️ Admin uchun to'lov va obuna talab qilinmaydi.",
+                                  reply_markup=kb_main_menu(is_admin=True))
+        await call.answer()
+        return
     data = await state.get_data()
     plan_key = data.get("plan_key")
     plan = config.PLANS.get(plan_key)

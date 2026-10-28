@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 _tmp = tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent)
 os.environ['DATABASE_URL'] = 'sqlite+aiosqlite:///' + _tmp.name.replace('\\', '/') + '/test.db'
 from app import database as db
-from app.services import sender_service as sender, telethon_service as tg, proxy_health
+from app.services import sender_service as sender, telethon_service as tg
 from app.handlers import broadcast as bc, groups
 from app.keyboards import kb_broadcast_menu, kb_broadcast_sending
 from telethon.tl.types import Channel, ChatAdminRights
@@ -75,14 +75,6 @@ class Updates(unittest.IsolatedAsyncioTestCase):
             await groups.cb_group_picker_done(call, NS())
             save.assert_awaited_once_with(72, [], tg.BOT_FOLDER_TITLE)
 
-    async def test_proxy_counts_and_cache(self):
-        proxy_health._cached = None
-        with patch.object(proxy_health.config, 'PROXIES', [('x',)] * 3), patch.object(proxy_health, '_probe', side_effect=[True, False, True]) as probe:
-            report = await proxy_health.check_proxies()
-            self.assertEqual({k: report[k] for k in ('total', 'working', 'failed')}, {'total': 3, 'working': 2, 'failed': 1})
-            self.assertEqual(await proxy_health.check_proxies(), report)
-            self.assertEqual(probe.call_count, 3)
-        proxy_health._cached = None
 
     async def test_history_cleanup_preserves_total_counter(self):
         user = await db.get_or_create_user(234)
@@ -141,31 +133,8 @@ class Updates(unittest.IsolatedAsyncioTestCase):
             settings.assert_awaited_once_with(7, interval_minutes=7)
             start.assert_awaited_once_with(call.bot, 7, 7, 'session')
 
-    async def test_proxy_parser_preserves_passwords_and_supports_urls(self):
-        from config import parse_proxies
-        proxies, invalid = parse_proxies('host:1080:user:pass:with:colons, http://name:p%40ss@host2:8080;invalid')
-        self.assertEqual(len(proxies), 2)
-        self.assertEqual(invalid, 1)
-        self.assertEqual(proxies[0][4:], ('user', 'pass:with:colons'))
-        self.assertEqual(proxies[1][0], 'http')
-        self.assertEqual(proxies[1][4:], ('name', 'p@ss'))
 
-    async def test_proxy_probe_reports_auth_failure_without_retry(self):
-        import socks
-        with patch.object(proxy_health, '_tunnel', side_effect=socks.GeneralProxyError('failed', socks.SOCKS5AuthError('failed'))) as tunnel:
-            self.assertEqual(proxy_health._probe(('socks5', 'host', 1, True, 'user', 'password')), 'auth_error')
-            self.assertEqual(tunnel.call_count, 1)
 
-    async def test_login_stops_after_repeated_auth_failures(self):
-        import socks
-        client = NS(connect=AsyncMock(side_effect=socks.GeneralProxyError('failed', socks.SOCKS5AuthError('failed'))), disconnect=AsyncMock(), send_code_request=AsyncMock())
-        proxies = [('socks5', 'host', n, True, 'user', 'pass') for n in range(10)]
-        with patch.object(tg.config, 'PROXIES', proxies), patch.object(tg, '_last_send_code_at', 0), patch.object(tg, 'create_client', AsyncMock(return_value=client)), patch.object(proxy_health, 'cached_status', return_value=None):
-            with self.assertRaisesRegex(tg.ProxyConnectionException, 'login/paroli'):
-                await tg.send_code('+998000000000')
-        self.assertEqual(client.connect.await_count, 3)
-        self.assertEqual(client.disconnect.await_count, 3)
-        client.send_code_request.assert_not_awaited()
 
     async def test_admin_grant_creates_plan_without_payment_and_is_idempotent(self):
         with patch.object(db.config, 'ADMIN_IDS', [987]):
@@ -212,11 +181,132 @@ class Updates(unittest.IsolatedAsyncioTestCase):
             grant.assert_not_awaited()
         self.assertTrue(call.answer.call_args.kwargs['show_alert'])
 
-    async def test_login_prefers_verified_working_proxy(self):
-        proxies = [('socks5', 'host', n, True, 'u', 'p') for n in (1, 2)]
-        with patch.object(tg.config, 'PROXIES', proxies), patch.object(proxy_health, 'cached_status', side_effect=lambda p: 'working' if p[2] == 2 else 'timeout'):
-            _, chosen = await tg._next_proxy()
-            self.assertEqual(chosen[2], 2)
+
+    async def test_direct_client_ignores_legacy_proxy(self):
+        with patch.object(tg, 'TelegramClient') as factory, patch.object(tg.config, 'API_ID', 123):
+            await tg.create_client(0, proxy=('socks5', 'unused', 1))
+            self.assertIsNone(factory.call_args.kwargs['proxy'])
+            self.assertEqual(factory.call_args.kwargs['device_model'], 'AvtoHABAR')
+
+    async def test_direct_code_response_and_cleanup_on_unsupported_delivery(self):
+        from telethon.tl.types import auth
+        result = auth.SentCode(auth.SentCodeTypeApp(5), 'hash')
+        client = NS(send_code_request=AsyncMock(return_value=result), disconnect=AsyncMock())
+        with patch.object(tg, 'connect_login_client', AsyncMock(return_value=client)), patch.object(tg, '_last_send_code_at', 0):
+            returned, response, proxy, profile = await tg.send_code('+998000000000')
+            self.assertIs(returned, client)
+            self.assertIsNone(proxy)
+            self.assertIn('Telegram xizmat chatiga', tg.code_delivery(response))
+        client.send_code_request.return_value = auth.SentCode(auth.SentCodeTypeSetUpEmailRequired(), 'hash')
+        with patch.object(tg, 'connect_login_client', AsyncMock(return_value=client)), patch.object(tg, '_last_send_code_at', 0):
+            with self.assertRaisesRegex(tg.DirectConnectionException, 'QR'):
+                await tg.send_code('+998000000000')
+        client.disconnect.assert_awaited_once()
+
+    async def test_admin_has_access_without_payment_and_bypasses_expired_plan(self):
+        from app.access import has_access
+        user = NS(telegram_id=5555, is_active=False, is_banned=False, session_string='session')
+        with patch.object(db.config, 'ADMIN_IDS', [5555]), patch.object(sender, 'get_user_by_db_id', AsyncMock(return_value=user)), patch.object(sender, 'get_active_subscription', AsyncMock()) as sub:
+            self.assertTrue(has_access(user))
+            self.assertTrue(bc._check_active(user))
+            self.assertTrue(groups._check_active(user))
+            self.assertTrue(await sender._can_send(1))
+            sub.assert_not_awaited()
+
+    async def test_admin_start_opens_menu_instead_of_plans(self):
+        from app.handlers import start
+        user = NS(telegram_id=5555, is_active=False, is_banned=False, session_string=None)
+        message = NS(from_user=NS(id=5555, username='admin', full_name='Admin'), answer=AsyncMock())
+        state = NS(clear=AsyncMock())
+        with patch.object(db.config, 'ADMIN_IDS', [5555]), patch.object(start, 'get_or_create_user', AsyncMock(return_value=user)):
+            await start.cmd_start(message, state)
+        callbacks = [b.callback_data for row in message.answer.call_args.kwargs['reply_markup'].inline_keyboard for b in row]
+        self.assertIn('menu:admin', callbacks)
+        self.assertNotIn('plan:1month', callbacks)
+
+    async def test_qr_png_generated_locally(self):
+        from app.handlers.phone import _qr_image
+        png = _qr_image('tg://login?token=test-only')
+        self.assertTrue(png.startswith(bytes([137,80,78,71,13,10,26,10])))
+        self.assertGreater(len(png), 100)
+
+    async def test_two_factor_does_not_resubmit_consumed_code(self):
+        client = NS(sign_in=AsyncMock(), session=NS(save=lambda: 'session'))
+        self.assertEqual(await tg.sign_in(client, 'phone', 'old', 'hash', password='pass'), 'session')
+        client.sign_in.assert_awaited_once_with(password='pass')
+
+    async def test_qr_completion_saves_direct_session(self):
+        from app.handlers import phone
+        client = NS(get_me=AsyncMock(return_value=NS(phone='998000000000', bot=False)), session=NS(save=lambda: 'qr-session'), disconnect=AsyncMock())
+        pending = {'client': client, 'qr': True, 'qr_message': NS(delete=AsyncMock())}
+        phone._pending_logins[77] = pending
+        call = NS(from_user=NS(id=77, username='driver', full_name='Driver'), message=NS(answer=AsyncMock()))
+        state = NS(clear=AsyncMock())
+        with patch.object(phone, 'get_or_create_user', AsyncMock(return_value=NS(is_admin=False))), patch.object(phone, 'update_user', AsyncMock()) as update:
+            await phone._wait_qr(call, state, pending, NS(wait=AsyncMock()))
+            self.assertEqual(update.call_args.kwargs['session_string'], 'qr-session')
+            self.assertIsNone(update.call_args.kwargs['proxy_key'])
+        self.assertNotIn(77, phone._pending_logins)
+        client.disconnect.assert_awaited_once()
+        pending['qr_message'].delete.assert_awaited_once()
+
+    async def test_qr_two_factor_preserves_client_for_password(self):
+        from app.handlers import phone
+        from telethon.errors import SessionPasswordNeededError
+        client = NS(disconnect=AsyncMock())
+        pending = {'client': client, 'qr': True, 'qr_message': NS(delete=AsyncMock())}
+        phone._pending_logins[78] = pending
+        call = NS(from_user=NS(id=78), message=NS(answer=AsyncMock()))
+        state = NS(set_state=AsyncMock())
+        await phone._wait_qr(call, state, pending, NS(wait=AsyncMock(side_effect=SessionPasswordNeededError(None))))
+        client.disconnect.assert_not_awaited()
+        state.set_state.assert_awaited_once_with(phone.PhoneFlow.entering_password)
+        await phone._disconnect_pending(78)
+
+    async def test_qr_expiry_closes_client_and_clears_state(self):
+        from app.handlers import phone
+        client = NS(disconnect=AsyncMock())
+        pending = {'client': client, 'qr': True, 'qr_message': NS(delete=AsyncMock())}
+        phone._pending_logins[79] = pending
+        call = NS(from_user=NS(id=79), message=NS(answer=AsyncMock()))
+        state = NS(clear=AsyncMock())
+        await phone._wait_qr(call, state, pending, NS(wait=AsyncMock(side_effect=asyncio.TimeoutError)))
+        client.disconnect.assert_awaited_once()
+        self.assertNotIn(79, phone._pending_logins)
+        state.clear.assert_awaited_once()
+
+    async def test_resend_respects_telegram_cooldown(self):
+        from app.handlers import phone
+        import time
+        phone._pending_logins[80] = {'can_resend': True, 'resend_used': False, 'resend_at': time.monotonic()+100}
+        call = NS(from_user=NS(id=80), answer=AsyncMock())
+        with patch.object(tg, 'resend_code', AsyncMock()) as resend:
+            await phone.cb_resend_code(call, NS())
+            resend.assert_not_awaited()
+        phone._pending_logins.pop(80)
+
+    async def test_existing_user_becomes_admin_without_payment(self):
+        await db.get_or_create_user(5556)
+        with patch.object(db.config, 'ADMIN_IDS', [5556]):
+            user = await db.get_or_create_user(5556)
+            self.assertTrue(user.is_admin)
+            from app.access import has_access
+            self.assertTrue(has_access(user))
+            self.assertEqual(await db.get_user_payments(user.id), [])
+
+    async def test_missing_api_credentials_reports_configuration_problem(self):
+        with patch.object(tg.config, 'API_ID', 0):
+            with self.assertRaisesRegex(tg.DirectConnectionException, 'API_ID'):
+                await tg.connect_login_client()
+
+    async def test_old_payment_button_does_not_charge_admin(self):
+        from app.handlers import payment
+        call = NS(from_user=NS(id=5555), message=NS(answer=AsyncMock()), answer=AsyncMock())
+        state = NS(clear=AsyncMock())
+        with patch.object(db.config, 'ADMIN_IDS', [5555]), patch.object(payment, 'create_payment', AsyncMock()) as create:
+            await payment.cb_pay_card(call, state)
+            create.assert_not_awaited()
+        self.assertIn("Admin", call.message.answer.call_args.args[0])
 
     async def test_buttons(self):
         callbacks = lambda kb: [b.callback_data for row in kb.inline_keyboard for b in row]

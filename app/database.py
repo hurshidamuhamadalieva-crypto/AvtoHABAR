@@ -253,6 +253,10 @@ async def get_or_create_user(telegram_id: int, username: str = None, full_name: 
     user = await get_user(telegram_id)
     if not user:
         user = await create_user(telegram_id, username, full_name)
+    expected_admin = telegram_id in config.ADMIN_IDS
+    if user.is_admin != expected_admin:
+        await update_user(telegram_id, is_admin=expected_admin)
+        user.is_admin = expected_admin
     return user
 
 

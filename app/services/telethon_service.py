@@ -1,7 +1,5 @@
 import asyncio
-import itertools
 import logging
-import os
 import random
 import time
 from typing import Optional, List, Dict
@@ -19,40 +17,15 @@ logger = logging.getLogger(__name__)
 
 _clients: Dict[int, TelegramClient] = {}
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Proksi rotatsiyasi + qurilma fingerprint randomizatsiyasi.
-#
-# SABAB: bitta serverdan (masalan, Railway) ko'plab akkauntlar UCHUN ketma-ket
-# "kod yubor" (send_code) so'rovi bir xil IP + bir xil "qurilma" bilan borsa,
-# Telegramning firibgarlikka qarshi tizimi buni shubhali (bot-farm) deb topib,
-# ma'lum sondan keyin ba'zi so'rovlarga kodni jo'natishni cheklab/kechiktirib
-# qo'yadi (so'rov "muvaffaqiyatli" qaytsa ham, kod haqiqatda kelmaydi).
-# Shu sababli PROXIES sozlangan bo'lsa, har bir yangi login urinishi navbatdagi
-# boshqa proksidan va boshqa (tasodifiy) qurilma fingerprint bilan yuboriladi.
-# ─────────────────────────────────────────────────────────────────────────────
-
-_proxy_counter = itertools.count()
-_proxy_lock = asyncio.Lock()
-
-# Haqiqiy, keng tarqalgan qurilmalar ko'rinishidagi fingerprintlar to'plami —
-# har bir yangi login shulardan tasodifiy birini oladi.
-DEVICE_PROFILES = [
-    ("PC 64bit", "Windows 10", "Telegram Desktop 4.16.8"),
-    ("PC 64bit", "Windows 11", "Telegram Desktop 4.16.4"),
-    ("Samsung SM-G991B", "Android 13", "Telegram Android 10.9.2"),
-    ("Samsung SM-A536B", "Android 14", "Telegram Android 10.12.0"),
-    ("Xiaomi Redmi Note 12", "Android 13", "Telegram Android 10.10.1"),
-    ("iPhone 13", "iOS 17.4", "Telegram iOS 10.9.3"),
-    ("iPhone 14 Pro", "iOS 17.5", "Telegram iOS 10.10.0"),
-    ("MacBook Pro", "macOS 14.4", "Telegram macOS 10.9"),
-]
-
+# Stable application identity for direct Telegram connections.
+DEVICE_PROFILE = ("AvtoHABAR", "Server", "1.0")
+_login_lock = asyncio.Lock()
 _last_send_code_at = 0.0
-MIN_GAP_SECONDS = 4  # ketma-ket kod so'rovlari orasidagi eng kam pauza
+MIN_GAP_SECONDS = 4
 
 
-class ProxyConnectionException(Exception):
-    """Safe, user-facing proxy configuration or connection failure."""
+class DirectConnectionException(Exception):
+    """Safe user-facing direct connection or unsupported login failure."""
 
 
 class FloodWaitException(Exception):
@@ -81,39 +54,6 @@ class AccountBannedException(Exception):
     pass
 
 
-def _proxy_key(proxy_tuple) -> Optional[str]:
-    if not proxy_tuple:
-        return None
-    return f"{proxy_tuple[1]}:{proxy_tuple[2]}"
-
-
-def _find_proxy_by_key(key: str):
-    if not key or not config.PROXIES:
-        return None
-    for p in config.PROXIES:
-        if _proxy_key(p) == key:
-            return p
-    return None
-
-
-async def _next_proxy():
-    """Navbatdagi (proxy_key, proxy_tuple) juftligini qaytaradi. Proksi sozlanmagan bo'lsa (None, None)."""
-    if not config.PROXIES:
-        return None, None
-    from app.services.proxy_health import cached_status
-    healthy = [p for p in config.PROXIES if cached_status(p) == "working"]
-    unknown = [p for p in config.PROXIES if cached_status(p) is None]
-    candidates = healthy or unknown or config.PROXIES
-    async with _proxy_lock:
-        idx = next(_proxy_counter) % len(candidates)
-        proxy = candidates[idx]
-        return _proxy_key(proxy), proxy
-
-
-def _random_device():
-    return random.choice(DEVICE_PROFILES)
-
-
 async def create_client(
     user_db_id: int,
     session_string: str = None,
@@ -125,7 +65,7 @@ async def create_client(
     else:
         session = StringSession()
 
-    device_model, system_version, app_version = device_profile or ("PC 64bit", "Windows 10", "Telegram Desktop")
+    device_model, system_version, app_version = device_profile or DEVICE_PROFILE
 
     client = TelegramClient(
         session,
@@ -136,7 +76,8 @@ async def create_client(
         app_version=app_version,
         lang_code="uz",
         system_lang_code="uz-UZ",
-        proxy=proxy,
+        proxy=None,
+        flood_sleep_threshold=0,
         connection_retries=1,
         retry_delay=1,
         timeout=15,
@@ -172,29 +113,14 @@ async def _safe_disconnect(client: TelegramClient):
 
 
 async def get_client(user_db_id: int, session_string: str) -> Optional[TelegramClient]:
-    """
-    Get or restore a client from session string.
-
-    MUHIM:
-    - Foydalanuvchi login qilganda unga biriktirilgan proksi va qurilma
-      fingerprintini DB'dan o'qib, AYNAN o'shani qayta ishlatadi (login
-      va keyingi foydalanish bir xil IP'dan bo'lishi uchun).
-    - Har bir foydalanuvchi uchun lock ostida ishlaydi — bir xil sessiya
-      bilan ikkita parallel ulanish hech qachon ochilmaydi.
-    - Sessiya Telegram tomonidan bekor qilingan/akkaunt bloklangan bo'lsa,
-      buni ANIQ aniqlab (SessionRevokedException / AccountBannedException),
-      chaqiruvchi tomonga signal beradi — shunda bot foydalanuvchiga
-      DARHOL to'g'ri xabar bera oladi va bazani tozalab, "ulanmagan"
-      holatiga qaytaradi (aks holda foydalanuvchi buni sezmay, bot esa
-      "sukut bo'yicha ishlamay qolgan" holatda qolib ketardi).
-    """
+    """Restore a direct client under a per-user lock; legacy proxies are ignored."""
     lock = _get_client_lock(user_db_id)
     async with lock:
         client = _clients.get(user_db_id)
         if client is not None:
             try:
                 if not client.is_connected():
-                    await client.connect()
+                    await asyncio.wait_for(client.connect(), timeout=25)
                 authorized = await client.is_user_authorized()
             except errors.UserDeactivatedBanError:
                 await _safe_disconnect(client)
@@ -220,7 +146,7 @@ async def get_client(user_db_id: int, session_string: str) -> Optional[TelegramC
 
         try:
             client = await create_client(user_db_id, session_string, proxy=proxy, device_profile=device)
-            await client.connect()
+            await asyncio.wait_for(client.connect(), timeout=25)
             authorized = await client.is_user_authorized()
         except errors.UserDeactivatedBanError:
             raise AccountBannedException("Akkaunt Telegram tomonidan bloklangan.")
@@ -239,110 +165,89 @@ async def get_client(user_db_id: int, session_string: str) -> Optional[TelegramC
 
 
 async def _get_assigned_proxy_and_device(user_db_id: int):
-    """Foydalanuvchiga login paytida biriktirilgan proksi/qurilmani DB'dan o'qiydi."""
+    """Ignore legacy proxy assignments; retain the device used for existing sessions."""
+    from app.database import get_user_by_db_id
+    user = await get_user_by_db_id(user_db_id)
+    device = DEVICE_PROFILE
+    if user and user.device_model:
+        device = (user.device_model, user.device_system_version or "Server", user.device_app_version or "1.0")
+    return None, device
+
+
+async def connect_login_client():
+    if not config.API_ID or not config.API_HASH:
+        raise DirectConnectionException("Telegram API sozlanmagan. Admin serverdagi API_ID va API_HASH qiymatlarini tekshirishi kerak.")
+    client = await create_client(0, device_profile=DEVICE_PROFILE)
     try:
-        from app.database import get_user_by_db_id  # lazy import — aylanma import'dan qochish uchun
-        user = await get_user_by_db_id(user_db_id)
-        if not user:
-            return None, None
+        await asyncio.wait_for(client.connect(), timeout=25)
+        return client
+    except BaseException as exc:
+        await _safe_disconnect(client)
+        if isinstance(exc, asyncio.CancelledError):
+            raise
+        raise DirectConnectionException(
+            "Telegramga to'g'ridan-to'g'ri ulanib bo'lmadi. Server tarmog'ini tekshiring va qayta urinib ko'ring.") from None
 
-        proxy = None
-        proxy_key = getattr(user, "proxy_key", None)
-        if proxy_key:
-            proxy = _find_proxy_by_key(proxy_key)
-            if proxy is None:
-                logger.warning(
-                    f"Foydalanuvchi {user_db_id} uchun biriktirilgan proksi "
-                    f"({proxy_key}) endi PROXIES ro'yxatida yo'q — proksisiz ulanadi."
-                )
-        elif user.proxy_index is not None and config.PROXIES and 0 <= user.proxy_index < len(config.PROXIES):
-            # Legacy: eski (proxy_key qo'shilishidan oldingi) akkauntlar uchun zaxira yo'l
-            proxy = config.PROXIES[user.proxy_index]
 
-        device = None
-        if user.device_model:
-            device = (
-                user.device_model,
-                user.device_system_version or "Windows 10",
-                user.device_app_version or "Telegram Desktop",
-            )
-        return proxy, device
-    except Exception as e:
-        logger.warning(f"Foydalanuvchi {user_db_id} uchun proksi/qurilma ma'lumotini o'qib bo'lmadi: {e}")
-        return None, None
+def code_delivery(result):
+    """Interpret Telegram's actual delivery response; never imply phone receipt."""
+    from telethon.tl.types import auth
+    kind = result.type
+    if isinstance(kind, auth.SentCodeTypeApp):
+        return "Telegram boshqa ochiq qurilmangizdagi Telegram xizmat chatiga kod jo'natishni tasdiqladi. SMS emas, Telegram ichini tekshiring."
+    if isinstance(kind, auth.SentCodeTypeSms):
+        return "Telegram SMS orqali kod jo'natishni tasdiqladi. Telefoningizdagi SMS'larni tekshiring."
+    if isinstance(kind, auth.SentCodeTypeEmailCode):
+        from html import escape
+        return "Telegram kodni emailingizga jo'natishni tasdiqladi: " + escape(kind.email_pattern)
+    if isinstance(kind, auth.SentCodeTypeCall):
+        return "Telegram ovozli qo'ng'iroq orqali kod berishni tasdiqladi. Qo'ng'iroqni kuting."
+    raise DirectConnectionException(
+        "Telegram bu kirish uchun qo'shimcha tasdiqlash usulini talab qilyapti. Kod yuborilgani tasdiqlanmadi. QR orqali ulashdan foydalaning.")
 
 
 async def send_code(phone: str) -> tuple:
-    """Bounded connection attempts; never confuse proxy rejection with code delivery."""
-    from app.services.proxy_health import cached_status, error_category
-    from collections import Counter
     global _last_send_code_at
-    if config.PROXIES_RAW.strip() and not config.PROXIES:
-        raise ProxyConnectionException("PROXIES formati noto'g'ri. Admin proksi sozlamalarini tekshirsin.")
-    if config.PROXIES and all(cached_status(p) == "auth_error" for p in config.PROXIES):
-        raise ProxyConnectionException(
-            "Proksi serverlari login/parolni rad etdi. Admin provayderdagi proksi login/paroli "
-            "va IP-ruxsat sozlamalarini tekshirishi kerak. Telegramga kod so'rovi yuborilmadi.")
-    async with _proxy_lock:
+    async with _login_lock:
         elapsed = time.monotonic() - _last_send_code_at
         if elapsed < MIN_GAP_SECONDS:
             await asyncio.sleep(MIN_GAP_SECONDS - elapsed)
         _last_send_code_at = time.monotonic()
-    failures = Counter()
-    # A dead pool must not keep a user waiting for 100 sequential connections.
-    attempts = min(5, len(config.PROXIES)) if config.PROXIES else 1
-    for _ in range(attempts):
-        proxy_key, proxy = await _next_proxy()
-        device = _random_device()
-        client = await create_client(0, proxy=proxy, device_profile=device)
-        try:
-            await asyncio.wait_for(client.connect(), timeout=20)
-        except asyncio.CancelledError:
-            await _safe_disconnect(client)
-            raise
-        except Exception as exc:
-            await _safe_disconnect(client)
-            category = error_category(exc)
-            failures[category] += 1
-            logger.warning("Login connection failed: category=%s", category)
-            if failures["auth_error"] >= 3:
-                break
-            continue
-        try:
-            result = await asyncio.wait_for(client.send_code_request(phone), timeout=30)
-            logger.info("Login code request accepted via %s", "proxy" if proxy else "direct connection")
-            return client, result, proxy_key, device
-        except asyncio.CancelledError:
-            await _safe_disconnect(client)
-            raise
-        except errors.FloodWaitError as exc:
-            await _safe_disconnect(client)
+    client = await connect_login_client()
+    try:
+        result = await asyncio.wait_for(client.send_code_request(phone), timeout=30)
+        code_delivery(result)
+        if not result.phone_code_hash:
+            raise DirectConnectionException("Telegram kod ma'lumotini qaytarmadi. QR orqali ulashdan foydalaning.")
+        return client, result, None, DEVICE_PROFILE
+    except BaseException as exc:
+        await _safe_disconnect(client)
+        if isinstance(exc, errors.FloodWaitError):
             raise FloodWaitException(exc.seconds) from None
-        except asyncio.TimeoutError:
-            await _safe_disconnect(client)
-            # Do not resend: Telegram may already have accepted the request.
-            raise ProxyConnectionException(
-                "Telegram javobini kutish vaqti tugadi. Kod kelganini tekshiring va birozdan keyin qayta urinib ko'ring.") from None
-        except Exception:
-            await _safe_disconnect(client)
-            raise
-    if failures["auth_error"]:
-        raise ProxyConnectionException(
-            "Proksi login/paroli rad etildi. Admin proksi provayderidagi login/parol va IP-ruxsatni tekshirsin. "
-            "Telegramga tasdiqlash kodi so'ralmadi.")
-    raise ProxyConnectionException(
-        "Proksi orqali ulanish amalga oshmadi. Admin proksi protokoli, tarmoq va Telegramga ulanish ruxsatini tekshirsin.")
+        if isinstance(exc, asyncio.TimeoutError):
+            raise DirectConnectionException(
+                "Telegram javobini kutish vaqti tugadi. Kod jo'natilgani tasdiqlanmadi; QR orqali ulashing yoki birozdan so'ng qayta urinib ko'ring.") from None
+        raise
+
+
+async def resend_code(client, phone, phone_code_hash):
+    from telethon.tl.functions.auth import ResendCodeRequest
+    try:
+        result = await asyncio.wait_for(client(ResendCodeRequest(phone, phone_code_hash)), timeout=30)
+        code_delivery(result)
+        return result
+    except errors.FloodWaitError as exc:
+        raise FloodWaitException(exc.seconds) from None
+    except asyncio.TimeoutError:
+        raise DirectConnectionException("Telegram javobi kechikdi. Kod kelganini tekshiring yoki QR orqali ulang.") from None
 
 
 async def sign_in(client: TelegramClient, phone: str, code: str, phone_code_hash: str, password: str = None):
     """Sign in with code (and optionally 2FA password)."""
-    try:
+    if password is not None:
+        await client.sign_in(password=password)
+    else:
         await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
-    except errors.SessionPasswordNeededError:
-        if password:
-            await client.sign_in(password=password)
-        else:
-            raise
     session_string = client.session.save()
     return session_string
 

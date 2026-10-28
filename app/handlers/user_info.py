@@ -8,6 +8,7 @@ from aiogram.fsm.context import FSMContext
 from app.database import get_or_create_user, get_user_payments, get_active_subscription
 from app.keyboards import kb_back_to_menu, kb_contact_admin
 from config import config
+from app.access import has_access, is_admin
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 @router.callback_query(F.data == "menu:payments")
 async def cb_my_payments(call: CallbackQuery, state: FSMContext):
     user = await get_or_create_user(call.from_user.id)
-    if not user.is_active:
+    if not has_access(user):
         await call.answer("❌ Faol obuna yo'q.", show_alert=True)
         return
 
@@ -35,7 +36,7 @@ async def cb_my_payments(call: CallbackQuery, state: FSMContext):
             f"  Qolgan kunlar: <b>{days_left} kun</b>"
         )
     else:
-        lines.append("📋 <b>Faol obuna yo'q</b>")
+        lines.append("⚙️ <b>Admin — obuna talab qilinmaydi</b>" if is_admin(user) else "📋 <b>Faol obuna yo'q</b>")
 
     if payments:
         lines.append("\n\n💳 <b>To'lovlar tarixi:</b>")

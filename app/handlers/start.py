@@ -9,6 +9,7 @@ from aiogram.fsm.context import FSMContext
 from app.database import get_or_create_user, get_active_subscription
 from app.keyboards import kb_plans, kb_main_menu
 from config import config
+from app.access import is_admin, has_access
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -32,6 +33,8 @@ E'loningizni yuzlab Telegram guruhlarga avtomatik, xavfsiz va professional tarzd
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
+    from app.handlers.phone import _disconnect_pending
+    await _disconnect_pending(message.from_user.id)
     await state.clear()
     user = await get_or_create_user(
         telegram_id=message.from_user.id,
@@ -39,7 +42,12 @@ async def cmd_start(message: Message, state: FSMContext):
         full_name=message.from_user.full_name,
     )
 
-    if user.is_banned:
+    if is_admin(user):
+        await message.answer("⚙️ <b>Admin menyusi</b>\n\nAdmin uchun obuna va to'lov talab qilinmaydi.",
+                             reply_markup=kb_main_menu(is_admin=True, has_phone=bool(user.session_string)))
+        return
+
+    if user.is_banned and not is_admin(user):
         await message.answer(
             "🚫 <b>Kirish taqiqlangan</b>\n\n"
             "Hisobingiz bloklangan. Murojaat uchun qo'llab-quvvatlash xizmatiga yozing.",
@@ -77,6 +85,8 @@ async def cmd_start(message: Message, state: FSMContext):
 
 @router.message(Command("menu"))
 async def cmd_menu(message: Message, state: FSMContext):
+    from app.handlers.phone import _disconnect_pending
+    await _disconnect_pending(message.from_user.id)
     await state.clear()
     user = await get_or_create_user(
         telegram_id=message.from_user.id,
@@ -84,11 +94,11 @@ async def cmd_menu(message: Message, state: FSMContext):
         full_name=message.from_user.full_name,
     )
 
-    if user.is_banned:
+    if user.is_banned and not is_admin(user):
         await message.answer("🚫 Hisobingiz bloklangan.", parse_mode="HTML")
         return
 
-    if not user.is_active:
+    if not has_access(user):
         await message.answer(
             "❌ <b>Faol obuna yo'q.</b>\n\nReja tanlash uchun /start buyrug'ini yuboring.",
             parse_mode="HTML",
@@ -104,6 +114,8 @@ async def cmd_menu(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "menu:home")
 async def cb_home(call: CallbackQuery, state: FSMContext):
+    from app.handlers.phone import _disconnect_pending
+    await _disconnect_pending(call.from_user.id)
     await state.clear()
     user = await get_or_create_user(call.from_user.id)
     text = "📋 <b>Asosiy Menyu</b>\n\nKerakli bo'limni tanlang:"

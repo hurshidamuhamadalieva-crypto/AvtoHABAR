@@ -16,3 +16,5 @@ README.md
 .DS_Store
 
 tests/
+
+.test_dependencies/

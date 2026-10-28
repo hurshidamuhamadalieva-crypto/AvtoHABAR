@@ -4,6 +4,7 @@ import io
 from html import escape
 from datetime import datetime
 from typing import Dict
+from app.access import has_access, is_admin
 
 from app.database import (
     get_active_advertisement, get_user_groups,
@@ -278,8 +279,10 @@ async def _sending_loop(bot, user_db_id: int, telegram_id: int, session_string: 
 
 async def _can_send(user_db_id):
     user = await get_user_by_db_id(user_db_id)
-    if not user or user.is_banned or not user.is_active or not user.session_string:
+    if not has_access(user) or not user.session_string:
         return False
+    if is_admin(user):
+        return True
     sub = await get_active_subscription(user_db_id)
     return not sub or not sub.expires_at or sub.expires_at > datetime.utcnow()
 

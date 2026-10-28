@@ -1,340 +1,69 @@
-# 🤖 AutoAd Bot — Telegram Auto Advertisement Bot
-
-A professional, production-ready Telegram bot for automated group advertising with subscription management.
-
-## ✨ Features
-
-- 💳 **3 Subscription Plans** with admin approval
-- 📱 **Telethon Integration** — connects user's own Telegram account
-- 📁 **Folder-based Group Import** — auto-detects groups from Telegram folders
-- 📢 **One-flow Broadcast** — ad text → interval → confirm → auto-send, all in a single guided flow
-- ⏱ **Customizable Intervals** — 7, 10, 15, or 20 minutes
-- ⏸ **Pause/Resume** sending without losing state
-- 📊 **Admin Panel** with full user/payment management
-- 💰 **2 Payment Methods**: Admin, Card+Screenshot
-- 🔔 **Automatic Reminders** for expiring subscriptions
-- 🚫 **Ban/Unban** users from admin panel
-- 📢 **Broadcast** messages to all users
-- 🖲 **Fully inline UI** — every menu uses inline buttons (except the one spot Telegram requires a reply keyboard: sharing your phone number)
-
----
-
-## 📁 Project Structure
-
-```
-tg_adbot/
-├── main.py                    # Entry point
-├── config.py                  # Configuration
-├── requirements.txt           # Dependencies
-├── .env.example              # Environment template
-├── .env                      # Your environment (create from example)
-├── data/
-│   ├── bot.db                # SQLite database (auto-created)
-│   └── sessions/             # Telethon sessions (auto-created)
-├── logs/
-│   └── bot.log               # Log file (auto-created)
-└── app/
-    ├── database.py           # Database models & helpers
-    ├── keyboards.py          # All keyboards/buttons
-    ├── states.py             # FSM states
-    ├── handlers/
-    │   ├── start.py          # /start, welcome, main menu
-    │   ├── payment.py        # Plan selection & payment flow
-    │   ├── phone.py          # Telegram account connection
-    │   ├── groups.py         # Group/folder management
-    │   ├── broadcast.py      # Ad text + interval + start/pause/stop (single flow)
-    │   ├── user_info.py      # Payments history, contact admin
-    │   └── admin.py          # Admin panel
-    ├── middlewares/
-    │   └── subscription.py   # Subscription gate middleware
-    └── services/
-        ├── telethon_service.py   # Telethon client management
-        ├── sender_service.py     # Background sending engine
-        └── scheduler.py          # Subscription reminder scheduler
-```
-
----
-
-## 🚀 Quick Start
-
-### 1. Prerequisites
-
-- Python 3.10+
-- A Telegram bot token from [@BotFather](https://t.me/BotFather)
-- Telegram API credentials from [my.telegram.org](https://my.telegram.org)
-
-### 2. Get Telegram API Credentials
-
-1. Go to [https://my.telegram.org](https://my.telegram.org)
-2. Log in with your phone number
-3. Go to **API Development Tools**
-4. Create an application
-5. Copy your `API_ID` and `API_HASH`
-
-### 3. Clone & Setup
-
-```bash
-# Navigate to project folder
-cd tg_adbot
-
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate      # Linux/Mac
-# venv\Scripts\activate       # Windows
-
-# Install dependencies
-pip install -r requirements.txt
-```
-
-### 4. Configure Environment
-
-```bash
-# Copy example env file
-cp .env.example .env
-
-# Edit .env with your values
-nano .env   # or any text editor
-```
-
-Fill in:
-- `BOT_TOKEN` — your bot token from @BotFather
-- `ADMIN_IDS` — your Telegram user ID(s), comma-separated
-- `ADMIN_USERNAME` — your Telegram username (without @)
-- `API_ID` — from my.telegram.org
-- `API_HASH` — from my.telegram.org
-- `CARD_NUMBER` — your payment card number
-- `CARD_HOLDER` — cardholder name
+# AvtoHABAR
 
-> Note: `ADMIN_USERNAME` works whether you write it with or without the leading `@` (e.g. `@myadmin` or `myadmin`) — the bot strips it automatically so the "Contact admin" button always opens Telegram directly instead of a browser.
+Telegram hisobidan tanlangan guruh va kanallarga matnli yoki rasmli e'lon yuboruvchi bot.
 
-### 5. Run the Bot
+## Ishga tushirish
 
-```bash
-python main.py
-```
+Python 3.10+ kerak. `pip install -r requirements.txt` bilan kutubxonalarni o'rnating.
+`.env.example` dan `.env` yarating va BOT_TOKEN, API_ID, API_HASH, ADMIN_IDS,
+ADMIN_USERNAME hamda karta ma'lumotlarini kiriting. API_ID va API_HASH o'zingizning
+https://my.telegram.org ilovangizdan olinadi. API_ID=0 bilan hisob ulash ishlamaydi.
+`python main.py` orqali ishga tushiring.
 
----
+Bot faqat proksisiz, Telegramga to'g'ridan-to'g'ri ulanadi. Eski PROXIES,
+PROXY_TYPE muhit sozlamalari va bazadagi eski proksi yozuvlari ishlatilmaydi.
+Serverda Telegramga chiqish tarmog'i ochiq bo'lishi kerak.
 
-## 💳 Subscription Plans
+## Hisob ulash
 
-| Plan | Price | Duration |
-|------|-------|----------|
-| 🥉 1 Month | 50,000 UZS | 30 days |
-| 🥈 3 Months | 200,000 UZS | 90 days |
-| 🥇 5 Months | 400,000 UZS | 150 days |
+- Telefon raqam orqali: Telegram qaytargan javob asosida kod Telegram xizmat
+  chatiga, SMS, email yoki qo'ng'iroq orqali berilishi ko'rsatiladi.
+- Telegram ruxsat bergan kutish vaqtidan keyin kodni bir marta qayta so'rash mumkin.
+  Qayta so'rash imkoniyatini Telegramning o'zi belgilaydi.
+- Kod kelmasa **QR orqali ulash (kodsiz)** tugmasidan foydalaning. QR'ni boshqa
+  ekranda ochib, telefondagi Telegram → Sozlamalar → Qurilmalar → Qurilma ulash
+  orqali skanerlang. Muddati o'tgan QR yangidan olinadi.
+- 2FA yoqilgan hisobda bulut paroli alohida so'raladi. Parol xabari tekshirishdan
+  keyin o'chiriladi. QR rasmlari muddati tugaganda, ulanish yakunlanganda yoki
+  bekor qilinganda o'chiriladi; diskda to'planmaydi.
+- Qo'llab-quvvatlanmagan yoki muddati tugagan javobda "kod yuborildi" degan
+  xabar chiqarilmaydi. Kod yetkazilishi Telegram tomonidan boshqariladi.
 
-Prices can be changed in `config.py` under `PLANS`.
+## Obuna va admin
 
----
+ADMIN_IDS dagi adminlar obunasiz va to'lov arizasisiz barcha bo'limlardan foydalanadi.
+Avval bazaga oddiy foydalanuvchi bo'lib kirgan adminning maqomi ham yangilanadi.
+Oddiy foydalanuvchilar uchun 1, 3 yoki 5 oylik obuna va admin tasdig'i mavjud.
 
-## 👤 User Flow
+Admin paneli → **Shafyor qo'shish** → ID → tarif → tasdiqlash: to'lov arizasisiz
+obuna bugundan tanlangan muddatga beriladi, oldingi faol tarif almashtiriladi.
+Foydalanuvchi hali /start bosmagan bo'lsa ham obuna saqlanadi. Takroriy tasdiqlash
+va eski tugmalar orqali boshqa arizani faollashtirish cheklangan.
 
-1. User sends `/start`
-2. Selects a subscription plan
-3. Chooses payment method (Admin / Card)
-4. Admin approves payment → user gets access
-5. User connects their Telegram account (📱 Raqam qo'shish)
-6. User imports groups from a folder (📂 Guruh qo'shish)
-7. User taps **📢 E'lon yuborish** — writes the ad text, picks an interval, confirms
-8. Bot sends the ad to all groups automatically and keeps repeating on the chosen interval (with pause/stop controls)
+## E'lonlar va guruh/kanallar
 
----
+Guruh yoki kanalni Telegram jildidan import qiling yoki "Bot uchun" jildida tanlang.
+Kanalga yozish uchun ulangan hisob kanal egasi yoki post joylash huquqli admin bo'lishi kerak.
 
-## ⚙️ Admin Panel Commands
+Matnli e'lon yoki **Rasmli e'lon yuborish** → rasm → matn → interval → tasdiqlash.
+Rasmli matn 1024, oddiy matn 4096 Telegram belgisigacha. Formatlash saqlanadi.
+Interval variantlari: 5, 7, 10, 15 va 20 daqiqa; sikl tugagandan keyin hisoblanadi.
+Pauzada **Tahrirlash** orqali matn/rasm yangilanadi va eski intervalda davom etadi.
+Obuna tugaganda oddiy foydalanuvchining yuborishi to'xtaydi; adminda cheklanmaydi.
 
-Access via **⚙️ Admin Panel** button (shown to admins only):
+## Serverda joy sarfi
 
-| Button | Action |
-|--------|--------|
-| 👥 Users | View all registered users |
-| 💰 Payments | View payment history |
-| 📊 Statistics | Revenue, user count, messages sent |
-| 📢 Broadcast | Send message to all users |
-| 🚫 Ban User | Ban by Telegram ID |
-| ✅ Approve User | Manually activate a user |
-| ⏹ Stop User Sending | Force-stop a user's sending session |
-| 🔙 Main Menu | Return to main menu |
+Rasmning Telegram file_id qiymati saqlanadi, server diskiga rasm yig'ilmaydi.
+Loglar 2 MB dan 4 fayl bilan cheklanadi. Yuborish tafsilotlari har soatda tozalanadi:
+STAT_RETENTION_DAYS=7, MAX_SEND_STATS=20000; jami yuborish hisoblagichi saqlanadi.
+Faqat joriy e'lon saqlanadi. SQLite'da bo'sh sahifalar yetarlicha yig'ilsa joy qaytariladi.
 
----
+Docker'da data/ doimiy diskka ulangan bo'lishi kerak. Yangilashda yangi requirements.txt
+bo'yicha paketlarni o'rnatib, botni qayta ishga tushiring. SQLite ustunlari va yangi
+jadvallar avtomatik qo'shiladi. Mavjud obuna va guruhlar saqlanadi.
 
-## 🛡️ Security Notes
+## Testlar
 
-- User Telegram sessions are stored as encrypted strings in the database
-- Sessions never leave the server
-- Bot only sends to groups the user has access to
-- Users are responsible for their own ad content
-- Admin must manually approve all payments
-
----
-
-## 🔧 Production Deployment
-
-### Using systemd (Linux)
-
-Create `/etc/systemd/system/autoadbot.service`:
-
-```ini
-[Unit]
-Description=AutoAd Telegram Bot
-After=network.target
-
-[Service]
-Type=simple
-User=your_user
-WorkingDirectory=/path/to/tg_adbot
-ExecStart=/path/to/tg_adbot/venv/bin/python main.py
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable autoadbot
-sudo systemctl start autoadbot
-sudo systemctl status autoadbot
-```
-
-### Using screen
-
-```bash
-screen -S autoadbot
-python main.py
-# Ctrl+A then D to detach
-```
-
----
-
-## 📦 Dependencies
-
-| Package | Version | Purpose |
-|---------|---------|---------|
-| aiogram | 3.13.1 | Telegram Bot Framework |
-| telethon | 1.36.0 | Telegram User Client |
-| sqlalchemy | 2.0.36 | Async ORM |
-| aiosqlite | 0.20.0 | SQLite async driver |
-| python-dotenv | 1.0.1 | Environment config |
-| aiofiles | 24.1.0 | Async file I/O |
-| cryptg | 0.4.0 | Telethon encryption speedup |
-
----
-
-## 🐞 Troubleshooting
-
-**Bot doesn't start:**
-- Check `BOT_TOKEN` in `.env`
-- Ensure Python 3.10+
-
-**Telethon errors:**
-- Verify `API_ID` and `API_HASH`
-- Check internet connectivity
-
-**No groups found:**
-- User must be member of the groups
-- Try using "All Groups" (if no folders exist)
-
-**FloodWait errors:**
-- Normal — bot automatically waits
-- Increase interval to 15–20 minutes
-
-**Session expired:**
-- User must reconnect via 📱 Add Number
-
----
-
-## 🌐 Railway (yoki boshqa server)da "kod kelmayabdi" muammosi
-
-**Sabab:** Bitta serverdan (Railway, VPS va h.k.) bir nechta akkaunt ulanmoqchi
-bo'lganingizda, Telegram bir xil IP manzildan ketma-ket kelayotgan "kod yubor"
-so'rovlarini bot-farm urinishi deb hisoblab, ma'lum sondan keyin ba'zi
-raqamlarga kodni **yubormay qo'yishi** mumkin (so'rov botga "muvaffaqiyatli"
-qaytadi, lekin foydalanuvchiga SMS/Telegram kodi kelmaydi). Lokal kompyuterda
-muammo bo'lmasligi sababi — odatda uy IP manzili Telegram nazarida "toza" va
-kamdan-kam shubhali hisoblanadi, Railway kabi hosting IP'lari esa ko'p botlar
-tomonidan ishlatilgani uchun tezroq cheklanadi.
-
-**Botda nima qilingan:**
-- Agar `.env` faylida `PROXIES` sozlansa, har bir yangi login urinishi
-  navbatdagi (boshqa) proksidan foydalanadi — shu bilan Telegram uchun
-  so'rovlar bir nechta turli IP'dan kelayotgandek ko'rinadi.
-- Har bir yangi login uchun tasodifiy, lekin haqiqiy qurilma ko'rinishi
-  (Samsung, iPhone, Windows va h.k.) tanlanadi — barcha urinishlar bir xil
-  "qurilma"dan kelayotganday ko'rinmaydi.
-- So'rovlar orasida eng kamida bir necha soniyalik pauza saqlanadi.
-- Telegram haqiqatan ham vaqtinchalik cheklov (FloodWait) qo'ysa, bot buni
-  aniq ko'rsatadi ("taxminan N daqiqadan keyin urinib ko'ring") — avvalgidek
-  "kod yuborildi" deb yolg'on ma'lumot bermaydi.
-
-**Sizdan talab qilinadigan qadam — PROXIES sozlash:**
-1. SOCKS5 proksi xizmati sotib oling (residential/mobile proksilar eng
-   yaxshi natija beradi; oddiy datacenter proksilar ham Railway'nikidan
-   yaxshiroq, lekin ba'zan ular ham cheklanishi mumkin — bepul/umumiy
-   proksilardan saqlaning, ular ko'pincha allaqachon bloklangan bo'ladi).
-2. Har bir proksini `.env` dagi `PROXIES` ga qo'shing:
-   ```
-   PROXIES=1.2.3.4:1080:user1:pass1,5.6.7.8:1080:user2:pass2
-   ```
-3. Nechta akkauntni bir vaqtda ulamoqchi bo'lsangiz, shuncha (yoki undan
-   kamroq — chunki bot ularni aylantirib ishlatadi) proksi qo'shish tavsiya
-   etiladi.
-
-⚠️ **Muhim, halol ogohlantirish:** `PROXIES` bo'sh qoldirilsa, bot avvalgidek
-Railway'ning bitta umumiy IP'idan ishlaydi — kod ketma-ket ko'p akkaunt uchun
-kelmasligi ehtimoli baribir qoladi, chunki bu Telegramning o'z tomonidagi
-cheklov, uni faqat haqiqiy, turli IP manzillar (ya'ni real proksilar) orqali
-"aylanib o'tish" mumkin. Kodni o'zi sun'iy ravishda "har doim kep-kelaveradigan"
-qilib bo'lmaydi — bu Telegram serverining xavfsizlik siyosati.
-
-
-## 2026-10-27 yangilanishi
-
-- Guruhlar bilan birga ulangan hisob post joylay oladigan kanallar ham tanlanadi.
-  Kanal egasi yoki post joylash huquqiga ega administrator bo'lish kerak.
-  Avvalgi ro'yxatni yangilash uchun guruh/kanallarni qayta import qiling.
-- E'lon menyusida **Rasmli e'lon yuborish**: rasm → matn → interval → tasdiqlash.
-  Rasmli matn 1024, oddiy matn 4096 Telegram belgisigacha. Qalin matn va havolalar saqlanadi.
-- Pauzada **Tahrirlash** chiqadi. Yangi matn yuborilgach eski interval bilan davom etadi.
-  Rasm saqlanadi; tahrirlash vaqtida yangi foto yuborib uni almashtirish mumkin.
-- Admin panelidagi **Proxy** barcha sozlangan proksilar orqali Telegramga tunnel
-  ulanishini tekshiradi. Bir vaqtda ko'pi bilan 8 ta tekshiruv, ulanishga 5 soniya;
-  natija 60 soniya keshlanadi. Bu proksining ayni paytdagi ulanish holati.
-- Rasm Bot API file_id orqali saqlanadi; server diskiga yuklab yig'ilmaydi.
-  Bir yuborish vazifasida bir rasm Telegramga bir marta yuklanib qayta ishlatiladi.
-- Loglar 2 MB dan 4 fayl bilan cheklanadi. Muvaffaqiyatli har bir yuborish
-  alohida INFO logga yozilmaydi; sikl yakuni yoziladi.
-- Yuborish tafsilotlari har soatda tozalanadi: odatda oxirgi 7 kun, eng yangi
-  20000 yozuv. Umumiy yuborilgan xabarlar hisoblagichi saqlanadi. Sozlamalar:
-  `STAT_RETENTION_DAYS=7`, `MAX_SEND_STATS=20000`. Faqat joriy e'lon saqlanadi.
-  SQLite'da yetarlicha bo'sh sahifa yig'ilsa disk joyi qaytariladi.
-- Obuna tugaganda va hisob uzilganda yuborish to'xtatiladi. Eski inline
-  tugmalarda obuna cheklovi tekshiriladi. Dastur yopilganda fon vazifalari va
-  Telethon ulanishlari yopiladi.
-- Mavjud SQLite bazasiga yangi ustunlar bot ishga tushganda avtomatik qo'shiladi.
-  Docker yangilanishida `data/` doimiy diskka ulangan bo'lishi kerak.
-
-Tekshiruv: `python -m unittest discover -s tests -v`.
-
-
-## 2026-10-28: proksi diagnostikasi va shafyor qo'shish
-
-Admin paneli → **Shafyor qo'shish** → musbat Telegram ID → tarif → tasdiqlash.
-Foydalanuvchi hali /start bosmagan bo'lsa ham ID bazaga qo'shiladi. Obuna
-bugundan tanlangan kunlar soniga beriladi, oldingi faol tarif almashtiriladi.
-To'lov arizasi va sun'iy daromad yozuvi yaratilmaydi. Takroriy tasdiqlash
-bir xil obunani ikki marta faollashtirmaydi. Amal admin_grants jadvalida qayd etiladi.
-
-Proksi formatlari: `host:port:login:parol`, `socks5://login:parol@host:port`,
-`http://login:parol@host:port`. URL ichida maxsus belgilar percent-encoding
-bilan yoziladi. Eski formatdagi parolda `:` saqlanadi. Ajratkich: vergul,
-nuqtali vergul yoki yangi qator. Protokol URL yoki PROXY_TYPE orqali beriladi.
-Noto'g'ri formatlar admin hisobotida alohida sanaladi.
-
-Admin → Proxy hisoboti login/parol rad etilishi, ulanish vaqti tugashi,
-protokol va tarmoq xatolarini ajratadi. Telegramning ikki serveri tekshiriladi.
-Raqam ulashda ketma-ket 100 ta uzoq urinish qilinmaydi; takroriy autentifikatsiya
-rad etilsa kod so'ralmaydi va sabab ko'rsatiladi. Login/parol rad etilishi
-provayder sozlamasi orqali hal qilinadi; saytdagi "active" holati autentifikatsiya
-muvaffaqiyatli o'tishini bildirmaydi. PROXIES o'zgarganda serverdagi muhit
-sozlamasini ham yangilab, botni qayta ishga tushiring.
+`python -m unittest discover -s tests -v`
+
+Testlar vaqtinchalik bazada ishlaydi, haqiqiy foydalanuvchilarga xabar yoki kod yubormaydi.

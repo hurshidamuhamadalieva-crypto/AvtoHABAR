@@ -123,7 +123,6 @@ def kb_admin_panel() -> InlineKeyboardMarkup:
     builder.button(text="🚕 Shafyor qo'shish", callback_data="admin:add_driver")
     builder.button(text="💰 To'lovlar", callback_data="admin:payments")
     builder.button(text="📊 Statistika", callback_data="admin:stats")
-    builder.button(text="🌐 Proxy", callback_data="admin:proxies")
     builder.button(text="📢 Xabar yuborish", callback_data="admin:broadcast")
     builder.button(text="🚫 Bloklash", callback_data="admin:ban")
     builder.button(text="✅ Foydalanuvchini tasdiqlash", callback_data="admin:approve")
@@ -218,6 +217,7 @@ def kb_phone_menu(has_phone: bool = False) -> InlineKeyboardMarkup:
         builder.button(text="🗑 Raqamni uzish (session o'chirish)", callback_data="phone:disconnect")
     else:
         builder.button(text="✅ Roziman, davom etish", callback_data="phone:agree")
+    builder.button(text="📷 QR orqali ulash (kodsiz)", callback_data="phone:qr")
     builder.button(text="🔙 Menyuga qaytish", callback_data="phone:cancel")
     builder.adjust(1)
     return builder.as_markup()

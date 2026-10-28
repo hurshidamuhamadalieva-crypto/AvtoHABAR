@@ -11,6 +11,7 @@ Yuborishning o'zi avvalgidek — foydalanuvchi ulagan Telegram hisobi
 (session) orqali, u o'zi tanlagan guruhlarga — ishlaydi (app.services.sender_service).
 """
 import logging
+from app.access import has_access
 from html import escape
 
 from aiogram import Router, F
@@ -35,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 
 def _check_active(user) -> bool:
-    return user and user.is_active and not user.is_banned
+    return has_access(user)
 
 
 async def _render_broadcast_home(message_target, user, edit: bool = True):

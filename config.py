@@ -1,6 +1,4 @@
 import os
-import re
-from urllib.parse import urlsplit, unquote
 from dataclasses import dataclass
 from dotenv import load_dotenv
 
@@ -21,18 +19,6 @@ class Config:
     LOGS_DIR: str = "logs"
     STAT_RETENTION_DAYS: int = max(1, int(os.getenv("STAT_RETENTION_DAYS", "7")))
     MAX_SEND_STATS: int = max(100, int(os.getenv("MAX_SEND_STATS", "20000")))
-
-    # Proksi ro'yxati (ixtiyoriy, lekin ko'p akaunt bilan bitta serverdan (masalan,
-    # Railway) ulanganda TAVSIYA ETILADI). Har bir yangi "raqam ulash" urinishi
-    # shu ro'yxatdagi navbatdagi proksidan foydalanadi — shunda Telegram
-    # tomonidan barcha so'rovlar bitta IP'dan kelayotgani ko'rinmaydi.
-    #
-    # .env da PROXIES o'zgaruvchisiga vergul bilan ajratib yoziladi:
-    #   PROXIES=host1:port1:user1:pass1,host2:port2:user2:pass2,host3:port3
-    # (username/password ixtiyoriy). Bo'sh qoldirilsa — proksisiz, to'g'ridan-to'g'ri
-    # ulanadi (Railway'ning umumiy IP'si tez-tez cheklovga uchraydi).
-    PROXY_TYPE: str = os.getenv("PROXY_TYPE", "socks5")
-    PROXIES_RAW: str = os.getenv("PROXIES", "")
 
     # Yangi ulangan akkauntga "isinib olish" uchun beriladigan vaqt (daqiqada).
     # Shu vaqt ichida akkaunt orqali og'ir so'rov (masalan, barcha guruhlarni
@@ -70,38 +56,6 @@ class Config:
         os.makedirs(self.SESSIONS_DIR, exist_ok=True)
         os.makedirs(self.LOGS_DIR, exist_ok=True)
 
-        self.PROXIES, self.INVALID_PROXY_COUNT = parse_proxies(self.PROXIES_RAW, self.PROXY_TYPE)
-
-
-def parse_proxies(raw, default_type="socks5"):
-    """Accept provider exports and URLs without discarding colon-containing passwords."""
-    proxies, invalid = [], 0
-    for entry in re.split(r"[,;\r\n]+", raw):
-        entry = entry.strip()
-        if not entry:
-            continue
-        try:
-            if "://" in entry or "@" in entry:
-                parsed = urlsplit(entry if "://" in entry else f"{default_type}://{entry}")
-                kind = parsed.scheme.lower()
-                host, port = parsed.hostname, parsed.port
-                username = unquote(parsed.username) if parsed.username is not None else None
-                password = unquote(parsed.password) if parsed.password is not None else None
-            else:
-                parts = entry.split(":", 3)
-                if len(parts) not in (2, 4):
-                    raise ValueError("Invalid proxy format")
-                host, port = parts[:2]
-                username, password = parts[2:] if len(parts) == 4 else (None, None)
-                kind = default_type.lower().strip()
-            if kind == "socks5h":
-                kind = "socks5"
-            if kind not in ("socks5", "socks4", "http") or not host or not port or not 0 < int(port) < 65536:
-                raise ValueError("Invalid proxy protocol, host or port")
-            proxies.append((kind, host, int(port), True, username, password))
-        except (ValueError, TypeError):
-            invalid += 1
-    return proxies, invalid
 
 
 config = Config()
