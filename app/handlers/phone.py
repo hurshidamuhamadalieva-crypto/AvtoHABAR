@@ -271,6 +271,13 @@ async def _process_phone(message: Message, state: FSMContext, phone: str):
             reply_markup=kb_cancel_inline("phone:cancel")
         )
 
+    except telethon_service.ProxyConnectionException as exc:
+        from html import escape
+        await message.answer(
+            "❌ <b>Ulanish amalga oshmadi</b>\n\n" + escape(str(exc)),
+            parse_mode="HTML", reply_markup=kb_cancel_inline("phone:cancel"))
+        await state.set_state(PhoneFlow.entering_phone)
+
     except telethon_service.FloodWaitException as e:
         minutes = max(1, e.seconds // 60)
         logger.warning(f"FloodWait {e.seconds}s — {phone} uchun")

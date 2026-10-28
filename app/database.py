@@ -161,6 +161,15 @@ class SendStat(Base):
     user = relationship("User", back_populates="send_stats")
 
 
+class AdminGrant(Base):
+    __tablename__ = "admin_grants"
+    request_key = Column(String(32), primary_key=True)
+    admin_telegram_id = Column(BigInteger, nullable=False)
+    user_telegram_id = Column(BigInteger, nullable=False)
+    plan_key = Column(String(32), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 async def init_db():
     async with engine.begin() as conn:
         if "sqlite" in config.DATABASE_URL:
@@ -504,3 +513,37 @@ async def storage_maintenance():
         except Exception:
             logger.exception("History cleanup failed")
         await asyncio.sleep(3600)
+
+
+async def grant_driver_subscription(telegram_id, plan_key, admin_id, request_key):
+    """Create the user and subscription atomically, without a payment application."""
+    from datetime import timedelta
+    from sqlalchemy.exc import IntegrityError
+    if admin_id not in config.ADMIN_IDS or plan_key not in config.PLANS or telegram_id <= 0:
+        raise ValueError("Invalid admin grant")
+    plan = config.PLANS[plan_key]
+    now = datetime.utcnow()
+    async with async_session_maker() as session:
+        try:
+            session.add(AdminGrant(request_key=request_key, admin_telegram_id=admin_id,
+                                   user_telegram_id=telegram_id, plan_key=plan_key))
+            await session.flush()
+            user = (await session.execute(select(User).where(User.telegram_id == telegram_id))).scalar_one_or_none()
+            if not user:
+                user = User(telegram_id=telegram_id, is_admin=telegram_id in config.ADMIN_IDS)
+                session.add(user)
+                await session.flush()
+            await session.execute(update(Subscription).where(Subscription.user_id == user.id).values(is_active=False))
+            session.add(Subscription(user_id=user.id, plan_key=plan_key, plan_name=plan["name"],
+                                     price=plan["price"], days=plan["days"], activated_at=now,
+                                     expires_at=now + timedelta(days=plan["days"]), is_active=True))
+            user.is_active = True
+            user.is_banned = False
+            await session.commit()
+            return True
+        except IntegrityError:
+            await session.rollback()
+            existing = await session.get(AdminGrant, request_key)
+            if existing and existing.admin_telegram_id == admin_id and existing.user_telegram_id == telegram_id and existing.plan_key == plan_key:
+                return False
+            raise

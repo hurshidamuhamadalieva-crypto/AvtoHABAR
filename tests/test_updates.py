@@ -79,7 +79,7 @@ class Updates(unittest.IsolatedAsyncioTestCase):
         proxy_health._cached = None
         with patch.object(proxy_health.config, 'PROXIES', [('x',)] * 3), patch.object(proxy_health, '_probe', side_effect=[True, False, True]) as probe:
             report = await proxy_health.check_proxies()
-            self.assertEqual(report, {'total': 3, 'working': 2, 'failed': 1})
+            self.assertEqual({k: report[k] for k in ('total', 'working', 'failed')}, {'total': 3, 'working': 2, 'failed': 1})
             self.assertEqual(await proxy_health.check_proxies(), report)
             self.assertEqual(probe.call_count, 3)
         proxy_health._cached = None
@@ -140,6 +140,83 @@ class Updates(unittest.IsolatedAsyncioTestCase):
             save.assert_awaited_once_with(7, 'hello & welcome', 'new-photo', 'hello &amp; welcome')
             settings.assert_awaited_once_with(7, interval_minutes=7)
             start.assert_awaited_once_with(call.bot, 7, 7, 'session')
+
+    async def test_proxy_parser_preserves_passwords_and_supports_urls(self):
+        from config import parse_proxies
+        proxies, invalid = parse_proxies('host:1080:user:pass:with:colons, http://name:p%40ss@host2:8080;invalid')
+        self.assertEqual(len(proxies), 2)
+        self.assertEqual(invalid, 1)
+        self.assertEqual(proxies[0][4:], ('user', 'pass:with:colons'))
+        self.assertEqual(proxies[1][0], 'http')
+        self.assertEqual(proxies[1][4:], ('name', 'p@ss'))
+
+    async def test_proxy_probe_reports_auth_failure_without_retry(self):
+        import socks
+        with patch.object(proxy_health, '_tunnel', side_effect=socks.GeneralProxyError('failed', socks.SOCKS5AuthError('failed'))) as tunnel:
+            self.assertEqual(proxy_health._probe(('socks5', 'host', 1, True, 'user', 'password')), 'auth_error')
+            self.assertEqual(tunnel.call_count, 1)
+
+    async def test_login_stops_after_repeated_auth_failures(self):
+        import socks
+        client = NS(connect=AsyncMock(side_effect=socks.GeneralProxyError('failed', socks.SOCKS5AuthError('failed'))), disconnect=AsyncMock(), send_code_request=AsyncMock())
+        proxies = [('socks5', 'host', n, True, 'user', 'pass') for n in range(10)]
+        with patch.object(tg.config, 'PROXIES', proxies), patch.object(tg, '_last_send_code_at', 0), patch.object(tg, 'create_client', AsyncMock(return_value=client)), patch.object(proxy_health, 'cached_status', return_value=None):
+            with self.assertRaisesRegex(tg.ProxyConnectionException, 'login/paroli'):
+                await tg.send_code('+998000000000')
+        self.assertEqual(client.connect.await_count, 3)
+        self.assertEqual(client.disconnect.await_count, 3)
+        client.send_code_request.assert_not_awaited()
+
+    async def test_admin_grant_creates_plan_without_payment_and_is_idempotent(self):
+        with patch.object(db.config, 'ADMIN_IDS', [987]):
+            self.assertTrue(await db.grant_driver_subscription(98765, '3months', 987, 'grant-test-token'))
+            self.assertFalse(await db.grant_driver_subscription(98765, '3months', 987, 'grant-test-token'))
+        user = await db.get_user(98765)
+        self.assertTrue(user.is_active)
+        sub = await db.get_active_subscription(user.id)
+        self.assertEqual(sub.days, 90)
+        self.assertEqual(sub.plan_key, '3months')
+        self.assertEqual(await db.get_user_payments(user.id), [])
+        with patch.object(db.config, 'ADMIN_IDS', [987]):
+            with self.assertRaises(ValueError):
+                await db.grant_driver_subscription(98766, '1month', 123, 'unauthorized-token')
+        self.assertIsNone(await db.get_user(98766))
+
+    async def test_admin_driver_flow_requires_plan_and_confirmation(self):
+        from app.handlers import admin
+        data = {}
+        async def update_data(**kwargs):
+            data.update(kwargs)
+        async def clear():
+            data.clear()
+        state = NS(clear=AsyncMock(side_effect=clear), update_data=AsyncMock(side_effect=update_data), get_data=AsyncMock(side_effect=lambda: dict(data)), set_state=AsyncMock())
+        call = NS(from_user=NS(id=987), message=NS(edit_text=AsyncMock()), answer=AsyncMock(), bot=NS(send_message=AsyncMock()), data='driver_plan:1month')
+        message = NS(text='98767', answer=AsyncMock())
+        await admin.cb_add_driver(call, state)
+        await admin.receive_driver_id(message, state)
+        await admin.choose_driver_plan(call, state)
+        self.assertIsNone(await db.get_user(98767))
+        self.assertEqual(data['driver_plan'], '1month')
+        call.data = 'driver_confirm:' + data['grant_key']
+        with patch.object(db.config, 'ADMIN_IDS', [987]):
+            await admin.confirm_driver(call, state)
+        self.assertTrue((await db.get_user(98767)).is_active)
+        call.bot.send_message.assert_awaited_once()
+
+    async def test_old_admin_confirmation_cannot_grant_new_driver(self):
+        from app.handlers import admin
+        state = NS(get_data=AsyncMock(return_value={'driver_id': 100, 'driver_plan': '1month', 'grant_key': 'new-token'}))
+        call = NS(data='driver_confirm:old-token', answer=AsyncMock())
+        with patch.object(db, 'grant_driver_subscription', AsyncMock()) as grant:
+            await admin.confirm_driver(call, state)
+            grant.assert_not_awaited()
+        self.assertTrue(call.answer.call_args.kwargs['show_alert'])
+
+    async def test_login_prefers_verified_working_proxy(self):
+        proxies = [('socks5', 'host', n, True, 'u', 'p') for n in (1, 2)]
+        with patch.object(tg.config, 'PROXIES', proxies), patch.object(proxy_health, 'cached_status', side_effect=lambda p: 'working' if p[2] == 2 else 'timeout'):
+            _, chosen = await tg._next_proxy()
+            self.assertEqual(chosen[2], 2)
 
     async def test_buttons(self):
         callbacks = lambda kb: [b.callback_data for row in kb.inline_keyboard for b in row]

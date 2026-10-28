@@ -1,4 +1,6 @@
 import os
+import re
+from urllib.parse import urlsplit, unquote
 from dataclasses import dataclass
 from dotenv import load_dotenv
 
@@ -68,28 +70,38 @@ class Config:
         os.makedirs(self.SESSIONS_DIR, exist_ok=True)
         os.makedirs(self.LOGS_DIR, exist_ok=True)
 
-        # PROXIES qatorini tuple'lar ro'yxatiga aylantiramiz.
-        # MUHIM: Telethon (PySocks orqali) proksi tuple'ini aynan
-        # (proxy_type, host, port, rdns, username, password) tartibida kutadi —
-        # "rdns" (4-o'rin, odatda True) qismini qo'shmasak, PySocks
-        # username/parolni noto'g'ri joyga o'qib, autentifikatsiyani rad etadi
-        # ("All offered SOCKS5 authentication methods were rejected" xatosi
-        # aynan shundan kelib chiqqan edi).
-        self.PROXIES = []
-        for entry in self.PROXIES_RAW.split(","):
-            entry = entry.strip()
-            if not entry:
-                continue
-            parts = entry.split(":")
-            try:
-                if len(parts) == 2:
-                    host, port = parts
-                    self.PROXIES.append((self.PROXY_TYPE, host, int(port), True, None, None))
-                elif len(parts) == 4:
-                    host, port, user, pwd = parts
-                    self.PROXIES.append((self.PROXY_TYPE, host, int(port), True, user, pwd))
-            except ValueError:
-                pass
+        self.PROXIES, self.INVALID_PROXY_COUNT = parse_proxies(self.PROXIES_RAW, self.PROXY_TYPE)
+
+
+def parse_proxies(raw, default_type="socks5"):
+    """Accept provider exports and URLs without discarding colon-containing passwords."""
+    proxies, invalid = [], 0
+    for entry in re.split(r"[,;\r\n]+", raw):
+        entry = entry.strip()
+        if not entry:
+            continue
+        try:
+            if "://" in entry or "@" in entry:
+                parsed = urlsplit(entry if "://" in entry else f"{default_type}://{entry}")
+                kind = parsed.scheme.lower()
+                host, port = parsed.hostname, parsed.port
+                username = unquote(parsed.username) if parsed.username is not None else None
+                password = unquote(parsed.password) if parsed.password is not None else None
+            else:
+                parts = entry.split(":", 3)
+                if len(parts) not in (2, 4):
+                    raise ValueError("Invalid proxy format")
+                host, port = parts[:2]
+                username, password = parts[2:] if len(parts) == 4 else (None, None)
+                kind = default_type.lower().strip()
+            if kind == "socks5h":
+                kind = "socks5"
+            if kind not in ("socks5", "socks4", "http") or not host or not port or not 0 < int(port) < 65536:
+                raise ValueError("Invalid proxy protocol, host or port")
+            proxies.append((kind, host, int(port), True, username, password))
+        except (ValueError, TypeError):
+            invalid += 1
+    return proxies, invalid
 
 
 config = Config()

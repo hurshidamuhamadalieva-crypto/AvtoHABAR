@@ -120,6 +120,7 @@ def kb_broadcast_sending(is_paused: bool) -> InlineKeyboardMarkup:
 def kb_admin_panel() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="👥 Foydalanuvchilar", callback_data="admin:users")
+    builder.button(text="🚕 Shafyor qo'shish", callback_data="admin:add_driver")
     builder.button(text="💰 To'lovlar", callback_data="admin:payments")
     builder.button(text="📊 Statistika", callback_data="admin:stats")
     builder.button(text="🌐 Proxy", callback_data="admin:proxies")

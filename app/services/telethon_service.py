@@ -51,6 +51,10 @@ _last_send_code_at = 0.0
 MIN_GAP_SECONDS = 4  # ketma-ket kod so'rovlari orasidagi eng kam pauza
 
 
+class ProxyConnectionException(Exception):
+    """Safe, user-facing proxy configuration or connection failure."""
+
+
 class FloodWaitException(Exception):
     """Telegram vaqtincha yangi kod/kirish so'rovlarini cheklaganda ko'tariladi."""
     def __init__(self, seconds: int):
@@ -96,9 +100,13 @@ async def _next_proxy():
     """Navbatdagi (proxy_key, proxy_tuple) juftligini qaytaradi. Proksi sozlanmagan bo'lsa (None, None)."""
     if not config.PROXIES:
         return None, None
+    from app.services.proxy_health import cached_status
+    healthy = [p for p in config.PROXIES if cached_status(p) == "working"]
+    unknown = [p for p in config.PROXIES if cached_status(p) is None]
+    candidates = healthy or unknown or config.PROXIES
     async with _proxy_lock:
-        idx = next(_proxy_counter) % len(config.PROXIES)
-        proxy = config.PROXIES[idx]
+        idx = next(_proxy_counter) % len(candidates)
+        proxy = candidates[idx]
         return _proxy_key(proxy), proxy
 
 
@@ -129,7 +137,8 @@ async def create_client(
         lang_code="uz",
         system_lang_code="uz-UZ",
         proxy=proxy,
-        connection_retries=3,
+        connection_retries=1,
+        retry_delay=1,
         timeout=15,
     )
     return client
@@ -264,82 +273,65 @@ async def _get_assigned_proxy_and_device(user_db_id: int):
 
 
 async def send_code(phone: str) -> tuple:
-    """
-    Telefon raqamga kirish kodini yuboradi.
-
-    Qaytaradi: (client, result, proxy_key, device_profile)
-    — chaqiruvchi tomon (phone.py) muvaffaqiyatli kirishdan so'ng shu
-    proxy_key va device_profile'ni foydalanuvchiga DOIMIY biriktirib
-    saqlashi kerak, shunda keyingi barcha ulanishlar (get_client orqali)
-    ham AYNAN shu proksi/qurilmadan foydalanadi.
-
-    - Sozlangan bo'lsa, navbatdagi proksidan foydalanadi (rotatsiya) —
-      shunda ketma-ket kelgan urinishlar boshqa-boshqa IP'dan ko'rinadi.
-    - Har safar tasodifiy (lekin haqiqiy) qurilma fingerprinti tanlanadi.
-    - So'rovlar orasida eng kamida MIN_GAP_SECONDS pauza saqlanadi (portlash
-      shaklidagi so'rovlar Telegram tomonidan tezroq shubhali deb topiladi).
-    - Agar biror proksi ishlamasa (masalan, o'lik/bloklangan bo'lsa),
-      navbatdagi proksiga avtomatik o'tiladi.
-    - Telegram FloodWait qaytarsa, aniq kutish vaqti bilan FloodWaitException
-      ko'tariladi (chaqiruvchi tomon foydalanuvchiga tushunarli xabar
-      ko'rsatishi uchun).
-    """
+    """Bounded connection attempts; never confuse proxy rejection with code delivery."""
+    from app.services.proxy_health import cached_status, error_category
+    from collections import Counter
     global _last_send_code_at
-
+    if config.PROXIES_RAW.strip() and not config.PROXIES:
+        raise ProxyConnectionException("PROXIES formati noto'g'ri. Admin proksi sozlamalarini tekshirsin.")
+    if config.PROXIES and all(cached_status(p) == "auth_error" for p in config.PROXIES):
+        raise ProxyConnectionException(
+            "Proksi serverlari login/parolni rad etdi. Admin provayderdagi proksi login/paroli "
+            "va IP-ruxsat sozlamalarini tekshirishi kerak. Telegramga kod so'rovi yuborilmadi.")
     async with _proxy_lock:
-        elapsed = time.time() - _last_send_code_at
+        elapsed = time.monotonic() - _last_send_code_at
         if elapsed < MIN_GAP_SECONDS:
             await asyncio.sleep(MIN_GAP_SECONDS - elapsed)
-        _last_send_code_at = time.time()
-
-    attempts = max(1, len(config.PROXIES)) if config.PROXIES else 1
-    last_error = None
-
-    for attempt in range(attempts):
+        _last_send_code_at = time.monotonic()
+    failures = Counter()
+    # A dead pool must not keep a user waiting for 100 sequential connections.
+    attempts = min(5, len(config.PROXIES)) if config.PROXIES else 1
+    for _ in range(attempts):
         proxy_key, proxy = await _next_proxy()
         device = _random_device()
         client = await create_client(0, proxy=proxy, device_profile=device)
-
         try:
-            await client.connect()
-        except Exception as e:
-            logger.warning(f"Proksi bilan ulanib bo'lmadi ({proxy_key}): {e}. Keyingisiga o'tilmoqda...")
-            last_error = e
-            try:
-                await client.disconnect()
-            except Exception:
-                pass
-            continue
-
-        try:
-            result = await client.send_code_request(phone)
-            if proxy:
-                logger.info(f"Kod so'rovi yuborildi: {phone} — proksi orqali ({proxy_key})")
-            else:
-                logger.info(f"Kod so'rovi yuborildi: {phone} — proksisiz (to'g'ridan-to'g'ri)")
-            return client, result, proxy_key, device
-
-        except errors.FloodWaitError as e:
-            logger.warning(f"FloodWait {e.seconds}s — {phone} uchun kod so'rovida (proksi: {proxy_key})")
-            try:
-                await client.disconnect()
-            except Exception:
-                pass
-            raise FloodWaitException(e.seconds)
-
-        except Exception as e:
-            last_error = e
-            try:
-                await client.disconnect()
-            except Exception:
-                pass
-            # Ulanish/tarmoq xatosi bo'lsa keyingi proksini sinaymiz;
-            # aks holda (masalan, noto'g'ri raqam) darhol xatoni ko'taramiz.
-            if attempt < attempts - 1 and isinstance(e, (ConnectionError, OSError, asyncio.TimeoutError)):
-                continue
+            await asyncio.wait_for(client.connect(), timeout=20)
+        except asyncio.CancelledError:
+            await _safe_disconnect(client)
             raise
-
-    raise last_error or RuntimeError("Kod yuborib bo'lmadi: barcha proksilar ishlamadi.")
+        except Exception as exc:
+            await _safe_disconnect(client)
+            category = error_category(exc)
+            failures[category] += 1
+            logger.warning("Login connection failed: category=%s", category)
+            if failures["auth_error"] >= 3:
+                break
+            continue
+        try:
+            result = await asyncio.wait_for(client.send_code_request(phone), timeout=30)
+            logger.info("Login code request accepted via %s", "proxy" if proxy else "direct connection")
+            return client, result, proxy_key, device
+        except asyncio.CancelledError:
+            await _safe_disconnect(client)
+            raise
+        except errors.FloodWaitError as exc:
+            await _safe_disconnect(client)
+            raise FloodWaitException(exc.seconds) from None
+        except asyncio.TimeoutError:
+            await _safe_disconnect(client)
+            # Do not resend: Telegram may already have accepted the request.
+            raise ProxyConnectionException(
+                "Telegram javobini kutish vaqti tugadi. Kod kelganini tekshiring va birozdan keyin qayta urinib ko'ring.") from None
+        except Exception:
+            await _safe_disconnect(client)
+            raise
+    if failures["auth_error"]:
+        raise ProxyConnectionException(
+            "Proksi login/paroli rad etildi. Admin proksi provayderidagi login/parol va IP-ruxsatni tekshirsin. "
+            "Telegramga tasdiqlash kodi so'ralmadi.")
+    raise ProxyConnectionException(
+        "Proksi orqali ulanish amalga oshmadi. Admin proksi protokoli, tarmoq va Telegramga ulanish ruxsatini tekshirsin.")
 
 
 async def sign_in(client: TelegramClient, phone: str, code: str, phone_code_hash: str, password: str = None):

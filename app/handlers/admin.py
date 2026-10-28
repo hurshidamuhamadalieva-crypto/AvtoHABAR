@@ -270,7 +270,12 @@ async def cb_proxy_status(call: CallbackQuery):
             f"🌐 <b>Proxy holati</b>\n\n"
             f"Jami: <b>{result['total']}</b>\n"
             f"✅ Ishlayapti: <b>{result['working']}</b>\n"
-            f"❌ Ulanmadi: <b>{result['failed']}</b>\n\n"
+            f"❌ Ulanmadi: <b>{result['failed']}</b>\n"
+            f"🔑 Login/parol rad etildi: <b>{result['auth_error']}</b>\n"
+            f"⏳ Vaqt tugadi: <b>{result['timeout']}</b>\n"
+            f"🔌 Protokol xatosi: <b>{result['protocol_error']}</b>\n"
+            f"🌐 Tarmoq/ulanish xatosi: <b>{result['connection_error']}</b>\n"
+            f"⚠️ Noto'g'ri format: <b>{result['invalid']}</b>\n\n"
             "Telegram serveriga proksi orqali ulanish tekshirildi. "
             "Natija 60 soniya saqlanadi. Ulanmagan proksi vaqtincha ham javob bermagan bo'lishi mumkin.",
             reply_markup=kb_back_inline("menu:admin"))
@@ -278,3 +283,80 @@ async def cb_proxy_status(call: CallbackQuery):
         logger.exception("Proxy tekshiruvida xato")
         await status.edit_text("Proksilarni tekshirib bo'lmadi. Qayta urinib ko'ring.",
                                reply_markup=kb_back_inline("menu:admin"))
+
+
+@router.callback_query(F.data == "admin:add_driver", IsAdmin())
+async def cb_add_driver(call: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await state.set_state(AdminFlow.driver_id)
+    await call.message.edit_text("🚕 <b>Shafyor qo'shish</b>\n\nShafyor ID sini kiriting:",
+                                 reply_markup=kb_cancel_inline("admin:cancel"))
+    await call.answer()
+
+
+@router.message(AdminFlow.driver_id, IsAdmin())
+async def receive_driver_id(message: Message, state: FSMContext):
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    from uuid import uuid4
+    text = (message.text or "").strip()
+    if not text.isdecimal() or not 0 < int(text) < 2**63:
+        await message.answer("❌ Musbat raqamli Telegram ID kiriting.")
+        return
+    await state.update_data(driver_id=int(text), grant_key=uuid4().hex)
+    await state.set_state(AdminFlow.driver_plan)
+    builder = InlineKeyboardBuilder()
+    for key, plan in config.PLANS.items():
+        builder.button(text=plan["label"], callback_data=f"driver_plan:{key}")
+    builder.button(text="❌ Bekor qilish", callback_data="admin:cancel")
+    builder.adjust(1)
+    await message.answer("📋 Tarif belgilang:", reply_markup=builder.as_markup())
+
+
+@router.callback_query(AdminFlow.driver_plan, F.data.startswith("driver_plan:"), IsAdmin())
+async def choose_driver_plan(call: CallbackQuery, state: FSMContext):
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    key = call.data.split(":", 1)[1]
+    plan = config.PLANS.get(key)
+    data = await state.get_data()
+    if not plan or not data.get("driver_id"):
+        await call.answer("Tarif yoki ID topilmadi. Qayta boshlang.", show_alert=True)
+        return
+    await state.update_data(driver_plan=key)
+    await state.set_state(AdminFlow.driver_confirm)
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Tasdiqlash", callback_data=f"driver_confirm:{data['grant_key']}")
+    builder.button(text="❌ Bekor qilish", callback_data="admin:cancel")
+    builder.adjust(1)
+    await call.message.edit_text(
+        f"🚕 <b>Shafyorni tasdiqlash</b>\n\nID: <code>{data['driver_id']}</code>\n"
+        f"Tarif: <b>{plan['name']}</b>\nMuddat: <b>{plan['days']} kun</b>\n\n"
+        "Obuna bugundan boshlanadi, oldingi faol tarif o'rniga o'tadi. "
+        "To'lov arizasi talab qilinmaydi. Tasdiqlaysizmi?", reply_markup=builder.as_markup())
+    await call.answer()
+
+
+@router.callback_query(AdminFlow.driver_confirm, F.data.startswith("driver_confirm:"), IsAdmin())
+async def confirm_driver(call: CallbackQuery, state: FSMContext):
+    from app.database import grant_driver_subscription
+    data = await state.get_data()
+    if not all(data.get(key) for key in ("driver_id", "driver_plan", "grant_key")):
+        await call.answer("Ma'lumotlar eskirgan. Qayta boshlang.", show_alert=True)
+        return
+    if call.data.split(":", 1)[1] != data["grant_key"]:
+        await call.answer("Bu eski tasdiqlash tugmasi. Hozirgi xulosadagi tugmani bosing.", show_alert=True)
+        return
+    created = await grant_driver_subscription(data['driver_id'], data['driver_plan'], call.from_user.id, data['grant_key'])
+    await state.clear()
+    await state.set_state(AdminFlow.panel)
+    plan = config.PLANS[data['driver_plan']]
+    if created:
+        try:
+            await call.bot.send_message(data['driver_id'],
+                f"✅ Admin sizni tasdiqladi!\nTarif: {plan['name']}\nMuddat: {plan['days']} kun.\n/menu orqali foydalaning.")
+        except Exception:
+            # Accounts that have not started the bot can use the grant after /start.
+            logger.info("Admin grant saved; driver notification unavailable")
+    await call.message.edit_text(
+        f"✅ Shafyor <code>{data['driver_id']}</code> tasdiqlandi.\n"
+        f"{plan['name']} — {plan['days']} kun. To'lov arizasi yaratilmagan.", reply_markup=kb_admin_panel())
+    await call.answer("✅ Tayyor" if created else "Avval tasdiqlangan")

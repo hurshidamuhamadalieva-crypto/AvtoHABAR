@@ -315,3 +315,26 @@ qilib bo'lmaydi — bu Telegram serverining xavfsizlik siyosati.
   Docker yangilanishida `data/` doimiy diskka ulangan bo'lishi kerak.
 
 Tekshiruv: `python -m unittest discover -s tests -v`.
+
+
+## 2026-10-28: proksi diagnostikasi va shafyor qo'shish
+
+Admin paneli → **Shafyor qo'shish** → musbat Telegram ID → tarif → tasdiqlash.
+Foydalanuvchi hali /start bosmagan bo'lsa ham ID bazaga qo'shiladi. Obuna
+bugundan tanlangan kunlar soniga beriladi, oldingi faol tarif almashtiriladi.
+To'lov arizasi va sun'iy daromad yozuvi yaratilmaydi. Takroriy tasdiqlash
+bir xil obunani ikki marta faollashtirmaydi. Amal admin_grants jadvalida qayd etiladi.
+
+Proksi formatlari: `host:port:login:parol`, `socks5://login:parol@host:port`,
+`http://login:parol@host:port`. URL ichida maxsus belgilar percent-encoding
+bilan yoziladi. Eski formatdagi parolda `:` saqlanadi. Ajratkich: vergul,
+nuqtali vergul yoki yangi qator. Protokol URL yoki PROXY_TYPE orqali beriladi.
+Noto'g'ri formatlar admin hisobotida alohida sanaladi.
+
+Admin → Proxy hisoboti login/parol rad etilishi, ulanish vaqti tugashi,
+protokol va tarmoq xatolarini ajratadi. Telegramning ikki serveri tekshiriladi.
+Raqam ulashda ketma-ket 100 ta uzoq urinish qilinmaydi; takroriy autentifikatsiya
+rad etilsa kod so'ralmaydi va sabab ko'rsatiladi. Login/parol rad etilishi
+provayder sozlamasi orqali hal qilinadi; saytdagi "active" holati autentifikatsiya
+muvaffaqiyatli o'tishini bildirmaydi. PROXIES o'zgarganda serverdagi muhit
+sozlamasini ham yangilab, botni qayta ishga tushiring.

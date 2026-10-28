@@ -40,3 +40,6 @@ class AdminFlow(StatesGroup):
     broadcast = State()
     ban_input = State()
     edit_sub = State()
+    driver_id = State()
+    driver_plan = State()
+    driver_confirm = State()
